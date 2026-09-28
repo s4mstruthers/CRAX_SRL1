@@ -191,6 +191,36 @@ def _remove_pixels(
         return obs
     return {k: v for k, v in obs.items() if not k.startswith('pixels/')}
 
+def _summarise_update_cost(cost: jnp.ndarray, episode_length: int) -> Dict[str, jnp.ndarray]:
+    """Summarise the safety of the policy that collected one batch (runs on the GPU).
+
+    Args:
+      cost: per-step cost with shape (num_rollouts, unroll_length, num_envs),
+        taken before the batch is reshaped for PPO. Every step was produced by
+        the same policy pi_k, so these numbers describe pi_k alone.
+      episode_length: steps per episode, used to scale slice costs to an
+        episode-equivalent that can be compared with the budget d.
+
+    Returns:
+      Dict of scalar metrics, prefixed 'safety/'.
+    """
+    steps_per_env = cost.shape[0] * cost.shape[1]            # 16 * 8 = 128 by default
+    env_cost = jnp.sum(cost, axis=(0, 1))                    # each robot's total cost this update
+    # Approximation: scale a 128-step slice up to a full episode so it is on the same scale as d.
+    env_cost_ep = env_cost * (episode_length / steps_per_env)
+    quantiles = jnp.quantile(env_cost_ep, jnp.array([0.5, 0.9, 0.99]))
+    n_worst = max(1, env_cost_ep.shape[0] // 20)             # worst 5% of robots
+    worst = jnp.sort(env_cost_ep)[-n_worst:]
+    return {
+        'safety/frac_unsafe_steps': jnp.mean(cost > 0),      # how often any cost occurs
+        'safety/frac_envs_with_cost': jnp.mean(env_cost > 0),
+        'safety/env_cost_mean': jnp.mean(env_cost_ep),
+        'safety/env_cost_p50': quantiles[0],
+        'safety/env_cost_p90': quantiles[1],
+        'safety/env_cost_p99': quantiles[2],
+        'safety/env_cost_max': jnp.max(env_cost_ep),
+        'safety/env_cost_cvar95': jnp.mean(worst),           # average of the worst 5%
+    }
 
 def train(
         environment: envs.Env,
@@ -600,6 +630,14 @@ def train(
             (),
             length=batch_size * num_minibatches // num_envs,
         )
+
+        # Summarise pi_k's safety now, before learning turns it into pi_{k+1}.
+        # 'cost' is only collected by the safe algorithms (it is in their extra_fields).
+        update_safety_metrics = {}
+        if 'cost' in data.extras['state_extras']:
+            update_safety_metrics = _summarise_update_cost(
+                data.extras['state_extras']['cost'], episode_length)
+        
         # Have leading dimensions (batch_size * num_minibatches, unroll_length)
         data = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 1, 2), data)
         data = jax.tree_util.tree_map(
@@ -642,7 +680,9 @@ def train(
         if post_step_fn is not None:
             new_training_state, extra_metrics = post_step_fn(new_training_state, metrics)
             metrics = {**metrics, **extra_metrics}
-
+        
+        metrics = {**metrics, **update_safety_metrics}
+        
         if log_training_metrics:
             jax.debug.callback(
                 metrics_aggregator.update_train_metrics,
