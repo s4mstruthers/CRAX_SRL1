@@ -1,7 +1,7 @@
 """Export the full per-update history of wandb runs to CSV (one file per run).
 
 Usage (from the repo folder, with the crax env active):
-    python safety_analysis/download_wandb.py                  # all runs in groups starting with "safety_"
+    python safety_analysis/download_wandb.py                  # all runs in groups starting with "safety" (safety_*, safety2_*)
     python safety_analysis/download_wandb.py --group safety_ppo_lag_desync
     python safety_analysis/download_wandb.py --name <run display name>
 
@@ -47,7 +47,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--group", help="export all runs in this wandb group")
     parser.add_argument("--name", help="export the single run with this display name")
-    parser.add_argument("--group_prefix", default="safety_",
+    parser.add_argument("--group_prefix", default="safety",
                         help="if neither --group nor --name is given, export all groups starting with this")
     args = parser.parse_args()
 

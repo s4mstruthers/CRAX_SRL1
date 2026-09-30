@@ -163,10 +163,16 @@ def main():
         train_fn_base = get_algorithm_train_fn(alg_name)
         train_kwargs = filter_kwargs_for_fn(train_fn_base, cfg)
 
-        # Plain PPO ignores cost when learning, but we still record it so the
-        # unconstrained baseline gets the same per-update 'safety/' metrics as
-        # the safe algorithms. Only safe_* environments provide a cost signal.
-        if alg_name in ('ppo', 'ppo_cost') and env_name.startswith('safe_'):
+        # Budget used by the episode-level safety metrics ('safety_ep/frac_over_budget').
+        # The safe algorithms do not forward extra kwargs to ppo/train.py, so it is passed
+        # through the environment instead.
+        os.environ['CRAX_SAFETY_BOUND'] = str(config.safety_bound)
+
+        # Plain PPO ignores cost when learning, and PPO-Saute folds it into the reward,
+        # so neither collects the per-step cost by default. Record it anyway so they get
+        # the same per-update 'safety/' metrics as the other safe algorithms (logging
+        # only; learning is unchanged). Only safe_* environments provide a cost signal.
+        if alg_name in ('ppo', 'ppo_cost', 'ppo_saute') and env_name.startswith('safe_'):
             train_kwargs['extra_fields'] = (
                 'truncation', 'episode_metrics', 'episode_done', 'cost')
 

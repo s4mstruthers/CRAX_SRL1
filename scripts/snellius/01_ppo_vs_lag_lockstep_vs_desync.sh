@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Training-time safety: PPO vs PPO-Lag, and lock-step vs desynced robots (CRAX)
+# PPO vs PPO-Lag, lock-step vs desynced robots (experiment 01, DONE 30 Sep 2026)
 #
 # 6 runs on SafeGoal Point Level 1, 30M steps each (~114 policy updates,
 # ~14.6 episodes per robot), 2 seeds per configuration:
@@ -19,7 +19,7 @@
 # Expected cost: ~7 min per run at 85,900 steps/s -> ~15 SBU/run, ~90 SBU total.
 # Hard cap from --time: 6 x 30 min x 128 SBU/h = 384 SBU (only if every run hangs).
 #
-# Submit:  sbatch scripts/snellius/training_safety_ppo_vs_lag_desync.sh
+# Submit:  sbatch scripts/snellius/01_ppo_vs_lag_lockstep_vs_desync.sh
 # Check:   squeue -u $USER      Cancel: scancel <jobid>
 # =============================================================================
 #SBATCH --job-name=crax_ppo_vs_lag_desync

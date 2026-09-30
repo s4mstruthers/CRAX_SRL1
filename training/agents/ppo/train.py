@@ -223,6 +223,65 @@ def _summarise_update_cost(cost: jnp.ndarray, episode_length: int) -> Dict[str, 
         'safety/env_cost_cvar95': jnp.mean(worst),           # average of the worst 5%
     }
 
+def _summarise_completed_episodes(
+        episode_cost: jnp.ndarray,
+        episode_length_so_far: jnp.ndarray,
+        episode_done: jnp.ndarray,
+        truncation: jnp.ndarray,
+        episode_length: int,
+        budget: float,
+) -> Dict[str, jnp.ndarray]:
+    """Episode-level safety: the distribution of cost over episodes completed in this batch.
+
+    Unlike _summarise_update_cost, nothing is extrapolated: each value is the true
+    total cost of one finished episode. This gives an honest tail (p90/p99, share
+    of episodes over budget). The trade-off is that a finished episode spans the
+    last ~episode_length steps, so it mixes the few most recent policies.
+
+    Args:
+      episode_cost: running episode cost per step, shape (num_rollouts, unroll_length, num_envs).
+        At steps where episode_done == 1 it holds the finished episode's total cost.
+      episode_length_so_far: running episode length, same shape.
+      episode_done: 1.0 at the step an episode finished, else 0.0.
+      truncation: 1.0 if the episode ended because of the time limit (not the env).
+      episode_length: the time limit.
+      budget: the per-episode cost budget d, used for the "share over budget" metrics.
+
+    Returns:
+      Dict of scalar metrics, prefixed 'safety_ep/'. When no (valid) episode finished in
+      this batch all values are NaN, which the metrics logger skips.
+    """
+    done = episode_done > 0
+    # Exclude episodes that were cut short by the desync start offset: they hit the
+    # time limit (truncation == 1) with fewer than ~episode_length steps. Episodes the
+    # environment itself terminated early (truncation == 0) are kept. The running length
+    # reads episode_length - 1 for a full episode (the wrapper zeroes the first step), so
+    # a 1% tolerance is used.
+    full_length = episode_length_so_far >= 0.99 * episode_length
+    valid = done & ((truncation < 0.5) | full_length)
+    costs = jnp.where(valid, episode_cost, jnp.nan).reshape(-1)
+    count = jnp.sum(valid)
+
+    quantiles = jnp.nanquantile(costs, jnp.array([0.5, 0.9, 0.95, 0.99]))
+    worst5 = jnp.where(costs >= quantiles[2], costs, jnp.nan)   # worst 5% of episodes
+    over = jnp.where(valid.reshape(-1), (costs > budget).astype(jnp.float32), jnp.nan)
+    over2 = jnp.where(valid.reshape(-1), (costs > 2 * budget).astype(jnp.float32), jnp.nan)
+    nan = jnp.array(jnp.nan)
+    has = count > 0
+    pick = lambda v: jnp.where(has, v, nan)
+    return {
+        'safety_ep/count': count.astype(jnp.float32),
+        'safety_ep/cost_mean': pick(jnp.nanmean(costs)),
+        'safety_ep/cost_p50': pick(quantiles[0]),
+        'safety_ep/cost_p90': pick(quantiles[1]),
+        'safety_ep/cost_p99': pick(quantiles[3]),
+        'safety_ep/cost_max': pick(jnp.nanmax(costs)),
+        'safety_ep/cost_cvar95': pick(jnp.nanmean(worst5)),
+        'safety_ep/frac_over_budget': pick(jnp.nanmean(over)),      # share of episodes with cost > d
+        'safety_ep/frac_over_2x_budget': pick(jnp.nanmean(over2)),  # share with cost > 2d
+    }
+
+
 def train(
         environment: envs.Env,
         num_timesteps: int,
@@ -645,6 +704,19 @@ def train(
         if 'cost' in data.extras['state_extras']:
             update_safety_metrics = _summarise_update_cost(
                 data.extras['state_extras']['cost'], episode_length)
+        # Episode-level view: true cost of the episodes that finished in this batch.
+        ep_extras = data.extras['state_extras']
+        if 'cost' in ep_extras.get('episode_metrics', {}):
+            update_safety_metrics = {**update_safety_metrics, **_summarise_completed_episodes(
+                ep_extras['episode_metrics']['cost'],
+                ep_extras['episode_metrics']['length'],
+                ep_extras['episode_done'],
+                ep_extras['truncation'],
+                episode_length,
+                # Budget for the "share over budget" metrics; set by training/train_env.py
+                # from --safety_bound (default 25).
+                float(os.environ.get('CRAX_SAFETY_BOUND', '25')),
+            )}
         
         # Have leading dimensions (batch_size * num_minibatches, unroll_length)
         data = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 1, 2), data)
