@@ -1,3 +1,5 @@
 # Downloaded wandb data: large and reproducible with download_wandb.py, so not tracked.
 wandb_exports/
 *.csv
+# Output of make_figures.py / key_numbers.py: regenerate instead of committing.
+figures/

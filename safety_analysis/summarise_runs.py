@@ -42,12 +42,13 @@ def mean_or_none(values):
 
 
 def is_chunk_average(row, num_envs):
-    """True if a row's training metrics are an average over several updates.
+    """True if a row's training metrics are certainly an average over several updates.
 
-    Code before commit 'Stop progress_fn overwriting per-update metrics' also logged the
-    average of each epoch's updates at the epoch's last step, overwriting that update.
-    A genuine update always has a whole number of robots with cost and of finished
-    episodes; an averaged row almost never does (a few may slip through by coincidence).
+    Code before commit 'Stop progress_fn overwriting per-update metrics' (720b86c) also
+    logged the average of each epoch's updates at the epoch's last step, overwriting that
+    update. A genuine update always has a whole number of robots with cost and of finished
+    episodes; an averaged row usually does not (about 1 in 7 slips through by coincidence,
+    which averaged_rows() catches).
     """
     frac = num(row.get("training/safety/frac_envs_with_cost"))
     count = num(row.get("training/safety_ep/count"))
@@ -56,15 +57,30 @@ def is_chunk_average(row, num_envs):
     return not (robots_whole and count_whole)
 
 
+def averaged_rows(update_rows, num_envs):
+    """Flag every averaged row of one run (same rule as analysis_lib.averaged_rows).
+
+    The old code wrote the averaged values at the step of the epoch's evaluation. So in a
+    run where any row fails the whole-number test, every row that also carries evaluation
+    values (after step 0) is averaged as well, even if its numbers happen to be whole.
+    """
+    certain = [is_chunk_average(r, num_envs) for r in update_rows]
+    old_code = any(certain)
+    return [c or (old_code and num(r.get("eval/episode_cost")) is not None and (num(r.get("_step")) or 0) > 0)
+            for c, r in zip(certain, update_rows)]
+
+
 def summarise(path, budget, after_m):
     """Compute the summary metrics for one run's CSV."""
-    rows = list(csv.DictReader(open(path)))
+    with open(path, newline="") as fh:
+        rows = list(csv.DictReader(fh))
     group = os.path.basename(os.path.dirname(path))
     match = re.search(r"_n(\d+)", group)
     num_envs = int(match.group(1)) if match else 2048   # older groups all used 2048 robots
     upd = [r for r in rows if num(r.get("training/safety/env_cost_mean")) is not None]
-    n_averaged = sum(is_chunk_average(r, num_envs) for r in upd)
-    upd = [r for r in upd if not is_chunk_average(r, num_envs)]
+    drop = averaged_rows(upd, num_envs)
+    n_averaged = sum(drop)
+    upd = [r for r, d in zip(upd, drop) if not d]
     if not upd:
         return None
     col = lambda key: [num(r.get(key)) for r in upd]
