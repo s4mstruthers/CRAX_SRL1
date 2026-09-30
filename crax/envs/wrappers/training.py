@@ -76,6 +76,40 @@ class VmapWrapper(Wrapper):
     return jax.vmap(self.env.step)(state, action)
 
 
+class RandomStartStepWrapper(Wrapper):
+  """Desynchronises parallel environments by randomising their first episode.
+
+  Brax-style training resets every environment at the same moment, so all of
+  them move through their episodes in lock-step. Each policy update then only
+  sees one phase of the episode (e.g. steps 300-430 for every robot), which can
+  bias per-update statistics. This wrapper sets each environment's initial step
+  counter to a random value in [0, episode_length), so the first episode is
+  truncated at a different point per environment. AutoResetWrapper zeroes the
+  counter at every later reset, so the offsets persist for the whole run.
+
+  Must wrap the output of `wrap()` (i.e. sit outside EpisodeWrapper), and should
+  only be used for the training environment, never for evaluation.
+  """
+
+  def __init__(self, env: Env, episode_length: int, seed_offset: int = 7919):
+    super().__init__(env)
+    self.episode_length = int(episode_length)
+    self.seed_offset = seed_offset
+
+  def reset(self, rng: jax.Array) -> State:
+    state = self.env.reset(rng)
+    # rng holds one key per environment, shape (..., 2). Derive an independent
+    # key per environment so the offsets are uncorrelated with the env reset.
+    flat_keys = rng.reshape(-1, rng.shape[-1])
+    offsets = jax.vmap(
+        lambda k: jax.random.randint(
+            jax.random.fold_in(k, self.seed_offset), (), 0, self.episode_length)
+    )(flat_keys)
+    offsets = offsets.reshape(rng.shape[:-1]).astype(state.info['steps'].dtype)
+    state.info['steps'] = offsets
+    return state
+
+
 class EpisodeWrapper(Wrapper):
   """Maintains episode step count and sets done at episode end."""
 

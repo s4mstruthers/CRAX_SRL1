@@ -25,6 +25,7 @@ See: https://arxiv.org/pdf/1707.06347.pdf
 """
 
 import functools
+import os
 import time
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
 
@@ -435,6 +436,13 @@ def train(
         vision_kwargs,
     )
     _dbg(f"Environment wrapped. obs_size={env.observation_size}, action_size={env.action_size}")
+    # Optional: desynchronise the parallel training envs (research experiment on
+    # lock-step bias in per-update safety metrics). Training env only; the eval
+    # env is wrapped separately and is unaffected. Enable with
+    # CRAX_DESYNC_EPISODES=1.
+    if wrap_env and os.environ.get('CRAX_DESYNC_EPISODES', '0') == '1':
+        env = envs.training.RandomStartStepWrapper(env, episode_length)
+        print('[ppo/train] CRAX_DESYNC_EPISODES=1: training envs start at random episode steps')
     use_pmap = local_devices_to_use > 1
     if use_pmap:
         reset_fn = jax.pmap(env.reset, axis_name=_PMAP_AXIS_NAME)

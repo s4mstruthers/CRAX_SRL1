@@ -163,6 +163,13 @@ def main():
         train_fn_base = get_algorithm_train_fn(alg_name)
         train_kwargs = filter_kwargs_for_fn(train_fn_base, cfg)
 
+        # Plain PPO ignores cost when learning, but we still record it so the
+        # unconstrained baseline gets the same per-update 'safety/' metrics as
+        # the safe algorithms. Only safe_* environments provide a cost signal.
+        if alg_name in ('ppo', 'ppo_cost') and env_name.startswith('safe_'):
+            train_kwargs['extra_fields'] = (
+                'truncation', 'episode_metrics', 'episode_done', 'cost')
+
         # Inject vision network factory + pixel-obs wrapping kwargs if vision mode is enabled
         if config.vision:
             state_obs_key = 'state' if config.vision_obs_mode == 'pixels+state' else ''
