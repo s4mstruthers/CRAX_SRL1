@@ -23,6 +23,7 @@ import warnings
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.patches
 import matplotlib.pyplot as plt
 import matplotlib.ticker
 import matplotlib.transforms
@@ -171,7 +172,30 @@ def end_labels(ax, x, ys, names, min_gap=0.075, log=False, **text_kw):
             y = placed[-1] + gap
         placed.append(y)
     for i, y in zip(order, placed):
-        ax.text(x, inv(y), names[i], va="center", **text_kw)
+        ax.text(x, inv(y), names[i], va="center", zorder=6,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, pad=0.6), **text_kw)
+
+
+def legend_above(fig, handles, top=0.9, ncol=None, fontsize=9.5):
+    """One shared legend in a row above all panels, so it never covers any data.
+
+    top is where the panels end (figure fraction); the legend sits just above the panel
+    titles (22 points higher, whatever the figure height).
+    """
+    fig.subplots_adjust(top=top)
+    gap = 22 / (fig.get_figheight() * 72)
+    fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, top + gap), ncol=ncol or len(handles),
+               fontsize=fontsize, handlelength=2.2, columnspacing=2.0, frameon=False)
+
+
+def line_key(color, label, lw=2.0, ls="-", marker=None):
+    """Legend entry for a line (optionally with a marker)."""
+    return plt.Line2D([], [], color=color, lw=lw, ls=ls, marker=marker, ms=5, label=label)
+
+
+def seed_key(color=INK2):
+    """Legend entry for the small dots that mark individual seeds."""
+    return plt.Line2D([], [], ls="", marker="o", ms=4.5, color=color, alpha=0.55, label="one seed")
 
 
 def plain_log_ticks(ax, ticks, both=False):
@@ -286,9 +310,10 @@ def fig01_measurement_mean_vs_tail(runs):
     x = [m["ep_final_mean"] for r, m in goal]
     y = [m["slice_final_mean"] for r, m in goal]
     ax.scatter(x, y, s=16, color="#2a78d6", alpha=0.7, edgecolor="white", linewidth=0.4)
-    ax.plot([1, 300], [1, 300], color=INK, lw=0.9, ls=":")
+    ax.plot([1, 300], [1, 300], color=INK, lw=0.9, ls=":", label="equal (slice = episode)")
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_xlim(5, 250); ax.set_ylim(5, 250)
+    ax.legend(loc="upper left", fontsize=7.8)
     plain_log_ticks(ax, [5, 10, 25, 50, 100, 200], both=True)
     ax.set_xlabel("True mean episode cost (final quarter)")
     ax.set_ylabel("Slice-based mean (final quarter)")
@@ -305,8 +330,10 @@ def fig01_measurement_mean_vs_tail(runs):
     ax.set_xlabel("True p99 of episode cost (final quarter)")
     ax.set_ylabel("Slice-based p99 (final quarter)")
     ax.set_title("Tail: slice p99 overstates it", loc="left", color=INK)
-    ax.text(0.03, 0.95, "colour = number of robots\n(light 512 → dark 8192)\ndotted line = equal", transform=ax.transAxes,
-            fontsize=8, color=INK2, va="top")
+    robot_keys = [plt.Line2D([], [], ls="", marker="o", ms=5.5, color=ORDINAL5[i], label=f"{n} robots")
+                  for i, n in enumerate(NENVS)]
+    ax.legend(handles=robot_keys + [line_key(INK, "equal (slice = episode)", lw=0.9, ls=":")],
+              loc="upper left", fontsize=7.8)
     # (c) p99 vs robots for PPO-Lag
     ax = axes[2]
     for key, col, lab in [("slice_final_p99", "#86b6ef", "slice-based p99"), ("ep_final_p99", "#1c5cab", "true episode p99")]:
@@ -315,8 +342,9 @@ def fig01_measurement_mean_vs_tail(runs):
     ax.set_ylim(30, 2000)
     ax.set_yticks([50, 100, 200, 500, 1000])
     ax.set_yticklabels(["50", "100", "200", "500", "1000"])
-    ax.set_xticklabels([f"{n}\n({A.UPDATE_STEPS // n} steps)" for n in NENVS], fontsize=8)
-    ax.set_xlabel("Parallel robots (steps each robot runs per update)")
+    ax.set_xticklabels([f"{n}\n({A.UPDATE_STEPS // n})" for n in NENVS], fontsize=8)
+    ax.set_xlabel("Parallel robots (steps per robot per update)")
+    ax.set_ylabel("p99 of episode cost (final quarter)")
     ax.set_title("PPO-Lag: worst 1% by method", loc="left", color=INK)
     shade_failed_learning(ax, y_text=0.97, x_text=np.sqrt(2896 * 8192))    # left of the 8192 dots
     ax.legend(loc="upper left", fontsize=8)
@@ -338,13 +366,13 @@ def fig02_lockstep(runs):
                        "training/safety/env_cost_mean", col, lw=1.8)
     a.set_ylim(0, 60)
     a.set_xlim(0, 35.5)
-    budget_line(a, corner=True)
+    budget_line(a, label=False)
     a.set_xlabel("Training steps (millions)")
     a.set_ylabel("Mean cost per episode")
     a.set_title("PPO-Lag learns the same either way", loc="left", color=INK)
-    a.legend(handles=[plt.Line2D([], [], color=ALG_COLOR["ppo_lag"], lw=2, label="lock-step robots"),
-                      plt.Line2D([], [], color=LIGHT_BLUE, lw=2, label="desynced robots")],
-             loc="upper right", bbox_to_anchor=(1.0, 0.84), fontsize=8)
+    a.legend(handles=[line_key(ALG_COLOR["ppo_lag"], "lock-step robots (mean of 2 seeds)"),
+                      line_key(LIGHT_BLUE, "desynced robots (mean of 2 seeds)"),
+                      line_key(INK, "budget (25)", lw=1.0, ls="--")], loc="upper right", fontsize=8)
     ax.set_title("Lock-step leaves a dip at each episode start", loc="left", color=INK)
     # (b) position effect
     cols = {"safety_ppo_lockstep": ALG_COLOR["ppo"], "safety_ppo_lag_lockstep": ALG_COLOR["ppo_lag"], "safety_ppo_lag_desync": LIGHT_BLUE}
@@ -373,12 +401,13 @@ def fig02_lockstep(runs):
 
 def fig03_algos_cost_curves(runs):
     """Mean cost per update for the 7 algorithms (small multiples, 5 seeds each)."""
-    fig, axes = plt.subplots(2, 4, figsize=(11, 5.2), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 4, figsize=(11, 5.8), sharex=True, sharey=True,
+                             gridspec_kw={"hspace": 0.45})   # room for the x-label under the top-right panel
     for ax, alg in zip(axes.flat, ALGS):
         rs = A.select(runs, experiment="compare_algos", alg=alg)
         seeds_and_mean(ax, rs, "training/safety/env_cost_mean", ALG_COLOR[alg], max_step=CMP_MAX)
         ax.set_title(LABEL[alg], loc="left", color=INK)
-        ax.set_ylim(0, 130)
+        ax.set_ylim(0, 140)
         ax.set_xlim(0, 30.5)
         budget_line(ax, label=(alg == "ppo"))
     ax = axes.flat[-1]
@@ -388,6 +417,7 @@ def fig03_algos_cost_curves(runs):
     for ax in axes[1]:
         ax.set_xlabel("Training steps (millions)")
     axes[0, 3].tick_params(labelbottom=True)          # the panel below it is the text box
+    axes[0, 3].set_xlabel("Training steps (millions)")
     for ax in axes[:, 0]:
         ax.set_ylabel("Mean cost per episode")
     save(fig, "fig03_algos_cost_curves")
@@ -400,7 +430,8 @@ def fig04_algos_reward_curves(runs):
     (episodic/sum_reward). The dashed grey line in every panel is PPO's seed mean, so the
     reward each constrained method gives up can be read directly.
     """
-    fig, axes = plt.subplots(2, 4, figsize=(11, 5.2), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 4, figsize=(11, 5.8), sharex=True, sharey=True,
+                             gridspec_kw={"hspace": 0.45})   # room for the x-label under the top-right panel
     ppo_grid, ppo_arr = A.seed_curves(A.select(runs, experiment="compare_algos", alg="ppo"), None,
                                       max_step_m=CMP_MAX, series_fn=A.reward_series)
     ppo_mean = np.nanmean(ppo_arr, axis=0)
@@ -422,6 +453,7 @@ def fig04_algos_reward_curves(runs):
     for ax in axes[1]:
         ax.set_xlabel("Training steps (millions)")
     axes[0, 3].tick_params(labelbottom=True)          # the panel below it is the text box
+    axes[0, 3].set_xlabel("Training steps (millions)")
     for ax in axes[:, 0]:
         ax.set_ylabel("Episode reward")
     save(fig, "fig04_algos_reward_curves")
@@ -432,12 +464,12 @@ def fig05_algos_metrics(runs):
     panels = [
         ("avg_cost", "Average training cost per episode", "{:.0f}", (0, 125), False),
         ("pct_over", "% of updates over budget", "{:.0f}%", (0, 115), False),
-        ("ep_share_over", "% of finished training episodes over budget", "{:.0f}%", (0, 115), False),
+        ("ep_share_over", "% of training episodes over budget", "{:.0f}%", (0, 115), False),
         ("ep_final_p99", "Worst 1% of episodes (p99), final quarter", "{:.0f}", (0, 185), False),
         ("first_under_m", "First update under budget (M steps)", "{:.1f}", (0, 14.2), False),
         ("reward_final", "Episode reward, last 10 updates", "{:.1f}", (0, 45), False),
     ]
-    fig, axes = plt.subplots(2, 3, figsize=(12, 7.2), gridspec_kw={"hspace": 0.48})
+    fig, axes = plt.subplots(2, 3, figsize=(12, 7.2), gridspec_kw={"hspace": 0.48, "wspace": 0.28})
     short = ["PPO", "Lag", "PID", "CRPO", "FOCOPS", "P3O", "Saute"]
     for ax, (key, title, fmt, ylim, logy) in zip(axes.flat, panels):
         vals = [metric_values(A.select(runs, experiment="compare_algos", alg=a), key, max_step_m=CMP_MAX) for a in ALGS]
@@ -446,7 +478,7 @@ def fig05_algos_metrics(runs):
                 never_y=13.2 if key == "first_under_m" else None)
         ax.set_title(title, loc="left", color=INK, fontsize=9.5)
         if key in ("avg_cost", "ep_final_p99"):
-            budget_line(ax, label=False)
+            budget_line(ax)                          # dashed line, labelled "budget" at the right end
     save(fig, "fig05_algos_metrics")
 
 
@@ -476,6 +508,9 @@ def fig06_algos_tradeoff(runs):
     ax.set_ylabel("Episode reward at the end (last 10 updates)")
     ax.set_xlim(0, 110)
     ax.set_ylim(22, 40)
+    ax.legend(handles=[plt.Line2D([], [], ls="", marker="o", ms=4.5, color=INK2, alpha=0.55, label="one seed"),
+                       plt.Line2D([], [], ls="", marker="o", ms=8.5, markerfacecolor=INK2, markeredgecolor=INK,
+                                  label="mean of the 5 seeds")], loc="lower right", fontsize=8)
     save(fig, "fig06_algos_tradeoff")
 
 
@@ -484,12 +519,12 @@ def fig07_algos_penalties(runs):
     algs = ["ppo_lag", "ppo_pid", "crpo", "focops", "p3o"]
     pen_title = {"ppo_lag": "λ (Lagrange multiplier)", "ppo_pid": "λ (PID output)", "crpo": "% of updates optimising cost",
                  "focops": "ν (FOCOPS multiplier)", "p3o": "κ (penalty; log scale, cap 50)"}
-    fig, axes = plt.subplots(2, 5, figsize=(13, 5.0), sharex=True)
+    fig, axes = plt.subplots(2, 5, figsize=(13, 5.0), sharex=True, gridspec_kw={"wspace": 0.3})
     for j, alg in enumerate(algs):
         rs = A.select(runs, experiment="compare_algos", alg=alg)
         ax = axes[0, j]
         seeds_and_mean(ax, rs, "training/safety/env_cost_mean", ALG_COLOR[alg], max_step=CMP_MAX, lw=1.8)
-        ax.set_ylim(0, 110)
+        ax.set_ylim(0, 125)
         budget_line(ax, label=(alg == "p3o"))       # the only panel where the label does not sit on a curve
         ax.set_title(LABEL[alg], loc="left", color=INK)
         ax = axes[1, j]
@@ -511,12 +546,15 @@ def fig07_algos_penalties(runs):
         ax.set_xlabel("Training steps (M)")
     axes[0, 0].set_ylabel("Mean cost per episode")
     axes[1, 0].set_ylabel("Penalty signal")
+    legend_above(fig, [line_key(INK2, "mean of the 5 seeds"), line_key(INK2, "single seeds", lw=0.8),
+                       line_key(INK, "budget (25)", lw=1.0, ls="--")], top=0.88)
     save(fig, "fig07_algos_penalties")
 
 
 def fig08_algos_episode_tail(runs):
     """Episode-level cost distribution over training: mean, p90, p99 (log scale)."""
-    fig, axes = plt.subplots(2, 4, figsize=(11, 5.2), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 4, figsize=(11, 5.8), sharex=True, sharey=True,
+                             gridspec_kw={"hspace": 0.45})   # room for the x-label under the top-right panel
     for ax, alg in zip(axes.flat, ALGS):
         rs = A.select(runs, experiment="compare_algos", alg=alg)
         ends, names = [], []
@@ -539,10 +577,12 @@ def fig08_algos_episode_tail(runs):
     ax = axes.flat[-1]
     ax.axis("off")
     ax.text(0.02, 0.6, "True cost of the episodes that\nfinished in each update\n(seed mean).\n\nDarkest: mean\nMid: p90\nLightest: p99 (worst 1%)\n\n"
-            "Starts ~2M steps in: shortened\nfirst episodes are excluded.", transform=ax.transAxes, fontsize=9, color=INK2, va="center")
+            "Dashed line: budget (25).\n\nStarts ~2M steps in: shortened\nfirst episodes are excluded.", transform=ax.transAxes,
+            fontsize=9, color=INK2, va="center")
     for ax in axes[1]:
         ax.set_xlabel("Training steps (millions)")
     axes[0, 3].tick_params(labelbottom=True)          # the panel below it is the text box
+    axes[0, 3].set_xlabel("Training steps (millions)")
     for ax in axes[:, 0]:
         ax.set_ylabel("Episode cost (log scale)")
     save(fig, "fig08_algos_episode_tail")
@@ -550,7 +590,8 @@ def fig08_algos_episode_tail(runs):
 
 def fig09_algos_share_over(runs):
     """Share of finished episodes over budget, per update."""
-    fig, axes = plt.subplots(2, 4, figsize=(11, 5.0), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 4, figsize=(11, 5.8), sharex=True, sharey=True,
+                             gridspec_kw={"hspace": 0.45})   # room for the x-label under the top-right panel
     fn = lambda r: 100 * r.get("training/safety_ep/frac_over_budget")
     for ax, alg in zip(axes.flat, ALGS):
         rs = A.select(runs, experiment="compare_algos", alg=alg)
@@ -567,6 +608,7 @@ def fig09_algos_share_over(runs):
     for ax in axes[1]:
         ax.set_xlabel("Training steps (millions)")
     axes[0, 3].tick_params(labelbottom=True)          # the panel below it is the text box
+    axes[0, 3].set_xlabel("Training steps (millions)")
     for ax in axes[:, 0]:
         ax.set_ylabel("% of episodes over budget")
     save(fig, "fig09_algos_share_over")
@@ -600,8 +642,8 @@ def fig11_long_damping(runs):
         seeds_and_mean(axes[0], rs, None, ALG_COLOR[alg], series_fn=lambda r: A.rolling(r.get("training/safety/env_cost_mean"), win), lw=1.8)
         seeds_and_mean(axes[1], rs, None, ALG_COLOR[alg],
                        series_fn=lambda r: 100 * A.rolling(r.get("training/safety_ep/frac_over_budget"), win, np.nanmean), lw=1.8)
-    axes[0].set_title("Size of the swings: std of mean cost over ~5M steps", loc="left", color=INK)
-    axes[0].set_ylabel("Std of mean cost")
+    axes[0].set_title("Size of the swings (~5M-step window)", loc="left", color=INK)
+    axes[0].set_ylabel("Std of the mean cost per episode")
     axes[0].set_ylim(0, 12)
     axes[1].set_title("% of episodes over budget (~5M-step window)", loc="left", color=INK)
     axes[1].set_ylabel("% of episodes over budget")
@@ -610,8 +652,9 @@ def fig11_long_damping(runs):
     for ax in axes:
         ax.set_xlim(0, 106)
         ax.set_xlabel("Training steps (millions)")
-    axes[0].text(60, 9.5, "PPO-Lag", color=ALG_COLOR["ppo_lag"], fontsize=9, fontweight="bold")
-    axes[0].text(60, 8.3, "PPO-PID", color=ALG_COLOR["ppo_pid"], fontsize=9, fontweight="bold")
+    legend_above(fig, [line_key(ALG_COLOR["ppo_lag"], "PPO-Lag (mean of 3 seeds)"),
+                       line_key(ALG_COLOR["ppo_pid"], "PPO-PID (mean of 3 seeds)"),
+                       line_key(INK2, "single seeds", lw=0.8), line_key(AXIS, "50% (right panel)", lw=1.0)], top=0.86)
     save(fig, "fig11_long_damping")
 
 
@@ -641,14 +684,15 @@ def fig13_lr_dose_response(runs):
               ("clear_crossings", "Clear crossings of the budget (±10%)", (0, 9)),
               ("ep_share_over", "% of training episodes over budget", (0, 55)),
               ("reward_final", "Episode reward, last 10 updates", (20, 40))]
-    fig, axes = plt.subplots(2, 3, figsize=(12, 6.6), gridspec_kw={"hspace": 0.42, "wspace": 0.25})
+    fig, axes = plt.subplots(2, 3, figsize=(12, 6.8), gridspec_kw={"hspace": 0.5, "wspace": 0.25})
     for ax, (key, title, ylim) in zip(axes.flat, panels):
         # all runs of this sweep are 35M steps long, so the full run is used (max_step_m=34.95)
         trend_dots(ax, LRS, [metric_values(lr_runs(runs, lr), key, max_step_m=34.95) for lr in LRS], "#1c5cab", logx=True)
         ax.set_ylim(*ylim)
         ax.set_title(title, loc="left", color=INK, fontsize=9.5)
-    for ax in axes[1]:
+    for ax in axes.flat:
         ax.set_xlabel("λ learning rate (log scale; default 10)")
+    legend_above(fig, [line_key("#1c5cab", "PPO-Lag, mean over seeds", marker="o"), seed_key("#1c5cab")], top=0.9)
     save(fig, "fig13_lr_dose_response")
 
 
@@ -684,11 +728,11 @@ def fig14_envs_curves(runs):
 
 def fig15_envs_metrics(runs):
     """Safety, reward and throughput against the number of parallel robots."""
-    panels = [("ep_share_over", "% of training episodes over budget", (0, 105)),
-              ("reward_final", "Episode reward, last 10 updates", (0, 42)),
-              ("avg_cost", "Average training cost per episode", (0, 160)),
-              ("sps_median", "Training throughput (thousand steps/s)", (0, 265))]
-    fig, axes = plt.subplots(1, 4, figsize=(14, 3.6))
+    panels = [("ep_share_over", "% of episodes over budget", (0, 105)),
+              ("reward_final", "Reward (last 10 updates)", (0, 42)),
+              ("avg_cost", "Average cost per episode", (0, 160)),
+              ("sps_median", "Throughput (1000 steps/s)", (0, 265))]
+    fig, axes = plt.subplots(1, 4, figsize=(14, 3.8), gridspec_kw={"wspace": 0.28})
     for ax, (key, title, ylim) in zip(axes, panels):
         for alg in ["ppo", "ppo_lag"]:
             vals = [metric_values(env_runs(runs, alg, n), key, max_step_m=34.95) for n in NENVS]
@@ -700,9 +744,11 @@ def fig15_envs_metrics(runs):
         ax.set_xlabel("Parallel robots (log scale)")
         # throughput is unaffected by the learning failure, so that panel is not shaded
         if key != "sps_median":
-            shade_failed_learning(ax, label=(key == "reward_final"), y_text=0.97)
+            shade_failed_learning(ax, label=False)
         ax.set_xlim(512 / 1.35, 8192 * 1.35)
-    axes[0].legend(loc="lower left", fontsize=8)
+    shade_key = matplotlib.patches.Patch(facecolor=FAILED_SHADE, alpha=0.45, label="learning failed in some seeds")
+    legend_above(fig, [line_key(ALG_COLOR["ppo"], LABEL["ppo"], marker="o"), line_key(ALG_COLOR["ppo_lag"], LABEL["ppo_lag"], marker="o"),
+                       seed_key(), shade_key], top=0.84)
     save(fig, "fig15_envs_metrics")
 
 
@@ -750,7 +796,9 @@ def fig17_levels_metrics(runs):
         ax.set_title(title, loc="left", color=INK, fontsize=9.5)
         if key in ("avg_cost", "ep_final_p99"):
             budget_line(ax, label=False)
-    axes[0, 1].legend(loc="center right", fontsize=8)
+    # One shared legend in a row above the panels, so it never covers any data.
+    handles, _ = axes[0, 0].get_legend_handles_labels()
+    legend_above(fig, handles + [seed_key(), line_key(INK, "budget (25)", lw=1.0, ls="--")], top=0.9)
     save(fig, "fig17_levels_metrics")
 
 
@@ -827,9 +875,13 @@ def fig20_final_vs_training(runs):
     alg_handles = [plt.Line2D([], [], ls="", marker="o", color=ALG_COLOR[a], label=LABEL[a])
                    for a in ["ppo_lag", "ppo_pid", "crpo", "focops"]]
     set_handles = [plt.Line2D([], [], ls="", marker=m, color=INK2, label=k) for k, m in SETTING_MARKER.items()]
-    leg = ax.legend(handles=alg_handles, loc="upper right", fontsize=8, title="Algorithm", title_fontsize=8)
+    # both legends sit outside the plot area, to the right, so they never cover a run
+    leg = ax.legend(handles=alg_handles, loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8.5,
+                    title="Colour: algorithm", title_fontsize=8.5, alignment="left")
     ax.add_artist(leg)
-    ax.legend(handles=set_handles, loc="lower right", fontsize=8, title="Setting", title_fontsize=8)
+    leg.set_clip_on(False)        # add_artist clips to the axes; unclipped, the saved image keeps the whole legend
+    ax.legend(handles=set_handles, loc="upper left", bbox_to_anchor=(1.02, 0.62), fontsize=8.5,
+              title="Shape: setting", title_fontsize=8.5, alignment="left")
     ax.set_xlim(-1.5, 60)                     # a little room so a final cost of exactly 0 is visible
     ax.set_ylim(0, 70)
     ax.set_xlabel("Cost of the final policy in evaluation (last evaluation)")
@@ -890,10 +942,13 @@ def fig21_mean_vs_share(runs):
     alg_handles = [plt.Line2D([], [], ls="", marker="o", color=ALG_COLOR[a], label=LABEL[a]) for a in ALGS]
     lvl_handles = [plt.Line2D([], [], ls="", marker="o", color=INK2, label="Level 1"),
                    plt.Line2D([], [], ls="", marker="^", color=INK2, label="Levels 2-3")]
-    leg = ax.legend(handles=alg_handles, loc="lower right", fontsize=7.6, title="Algorithm", title_fontsize=7.6)
+    # both legends sit outside the plot area, to the right, so they never cover a run
+    leg = ax.legend(handles=alg_handles, loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8.5,
+                    title="Colour: algorithm", title_fontsize=8.5, alignment="left")
     ax.add_artist(leg)
-    ax.legend(handles=lvl_handles, loc="lower right", bbox_to_anchor=(0.73, 0.0), fontsize=7.6, title="Shape",
-              title_fontsize=7.6)
+    leg.set_clip_on(False)        # add_artist clips to the axes; unclipped, the saved image keeps the whole legend
+    ax.legend(handles=lvl_handles, loc="upper left", bbox_to_anchor=(1.02, 0.45), fontsize=8.5,
+              title="Shape: level", title_fontsize=8.5, alignment="left")
     save(fig, "fig21_mean_vs_share")
 
 
