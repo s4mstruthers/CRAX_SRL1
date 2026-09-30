@@ -18,7 +18,9 @@ Metric definitions (d = budget per 1000-step episode):
 import argparse
 import csv
 import glob
+import math
 import os
+import re
 import statistics as st
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,11 +28,12 @@ EXPORTS = os.path.join(HERE, "wandb_exports")
 
 
 def num(v):
-    """Parse a CSV cell to float; empty or non-numeric cells become None."""
+    """Parse a CSV cell to float; empty, non-numeric or non-finite (NaN/inf) cells become None."""
     try:
-        return float(v)
+        x = float(v)
     except (TypeError, ValueError):
         return None
+    return x if math.isfinite(x) else None
 
 
 def mean_or_none(values):
@@ -38,10 +41,30 @@ def mean_or_none(values):
     return st.mean(values) if values else None
 
 
+def is_chunk_average(row, num_envs):
+    """True if a row's training metrics are an average over several updates.
+
+    Code before commit 'Stop progress_fn overwriting per-update metrics' also logged the
+    average of each epoch's updates at the epoch's last step, overwriting that update.
+    A genuine update always has a whole number of robots with cost and of finished
+    episodes; an averaged row almost never does (a few may slip through by coincidence).
+    """
+    frac = num(row.get("training/safety/frac_envs_with_cost"))
+    count = num(row.get("training/safety_ep/count"))
+    robots_whole = frac is None or abs(frac * num_envs - round(frac * num_envs)) < 1e-3
+    count_whole = count is None or abs(count - round(count)) < 1e-6
+    return not (robots_whole and count_whole)
+
+
 def summarise(path, budget, after_m):
     """Compute the summary metrics for one run's CSV."""
     rows = list(csv.DictReader(open(path)))
+    group = os.path.basename(os.path.dirname(path))
+    match = re.search(r"_n(\d+)", group)
+    num_envs = int(match.group(1)) if match else 2048   # older groups all used 2048 robots
     upd = [r for r in rows if num(r.get("training/safety/env_cost_mean")) is not None]
+    n_averaged = sum(is_chunk_average(r, num_envs) for r in upd)
+    upd = [r for r in upd if not is_chunk_average(r, num_envs)]
     if not upd:
         return None
     col = lambda key: [num(r.get(key)) for r in upd]
@@ -71,6 +94,7 @@ def summarise(path, budget, after_m):
         "group": os.path.basename(os.path.dirname(path)),
         "run": os.path.splitext(os.path.basename(path))[0],
         "updates": len(mean),
+        "averaged_rows_dropped": n_averaged,
         "total_cost": sum(mean),
         "total_excess": sum(excess),
         "excess_share_first8": sum(excess[:8]) / sum(excess) if sum(excess) else None,

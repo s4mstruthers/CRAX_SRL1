@@ -960,6 +960,20 @@ def train(
         )
         _dbg("Evaluator created.")
 
+    def _for_progress(m):
+        """Metrics to pass to progress_fn.
+
+        With log_training_metrics on, every update is already logged individually by the
+        metrics logger. training_metrics holds the per-update arrays of the whole epoch;
+        passing them to progress_fn logs their *average* at the same wandb step as the
+        epoch's last update and overwrites that update's values. So only the epoch-level
+        timing entries (sps, walltime) and evaluation metrics are passed through.
+        """
+        if not log_training_metrics:
+            return m
+        return {k: v for k, v in m.items()
+                if not k.startswith('training/') or k in ('training/sps', 'training/walltime')}
+
     # Run initial eval
     metrics = {}
     if process_id == 0 and num_evals > 1 and evaluator is not None:
@@ -992,7 +1006,7 @@ def train(
             )
             _dbg(f"training_epoch_with_timing completed in {time.time() - _t0:.1f}s (iter {it})")
             current_step = int(_unpmap(training_state.env_steps))
-            progress_fn(current_step, training_metrics)
+            progress_fn(current_step, _for_progress(training_metrics))
 
             key_envs = jax.vmap(
                 lambda x, s: jax.random.split(x[0], s), in_axes=(0, None)
@@ -1026,7 +1040,7 @@ def train(
                 training_metrics,
             )
             logging.info(metrics)
-            progress_fn(current_step, metrics)
+            progress_fn(current_step, _for_progress(metrics))
 
     total_steps = current_step
     if not total_steps >= num_timesteps:
