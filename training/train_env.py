@@ -207,16 +207,28 @@ def main():
         )
         print("Training finished.")
 
-        # Log final metrics to wandb
+        # Log final metrics to the wandb run summary.
+        # final_metrics mixes scalars with per-update arrays from the last training epoch
+        # (JAX arrays, not only NumPy), and some entries can be NaN (e.g. an update in which
+        # no episode finished). Arrays are reduced with a NaN-aware mean and non-finite values
+        # are dropped, because wandb crashes when it tries to histogram an array with NaN.
+        # The summary is used instead of wandb.log: the per-update history is already logged,
+        # and a history row at step=num_timesteps would be out of order (training rounds the
+        # step count up) and would mix averaged values into the per-update curves.
         if use_wandb and wandb.run is not None and final_metrics:
             final_log_data = {}
             for key, value in final_metrics.items():
-                if value is not None:
-                    if isinstance(value, (np.ndarray,)) and value.ndim > 0:
-                        value = value.mean()
-                    final_log_data[key] = value
+                if value is None:
+                    continue
+                try:
+                    arr = np.asarray(value, dtype=np.float64)
+                except (TypeError, ValueError):
+                    continue
+                if arr.size == 0 or not np.isfinite(arr).any():
+                    continue
+                final_log_data[f"final/{key}"] = float(np.nanmean(arr)) if arr.ndim > 0 else float(arr)
             if final_log_data:
-                wandb.log(final_log_data, step=int(config.num_timesteps))
+                wandb.run.summary.update(final_log_data)
 
         if not config.skip_rollout:
             print(f"\nPerforming rollout evaluation...")
