@@ -113,6 +113,11 @@ run_tasks() {
   module purge
   module load 2024
   module load Python/3.12.3-GCCcore-13.3.0
+  # CUDA stack for jax: the plugin is compiled against cuDNN 9.8+, and the 2024
+  # stack only ships cuDNN 9.5 (XLA rejects it). Validated on gcn3, 2026-10-03.
+  module load 2025
+  module load CUDA/12.8.0
+  module load cuDNN/9.10.1.4-CUDA-12.8.0
   source ~/venvs/crax/bin/activate
   cd "${REPO}"
   mkdir -p logs

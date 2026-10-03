@@ -32,10 +32,15 @@
 
 set -euo pipefail
 
-# --- Software stack (same as run_test.sh) -------------------------------------
+# --- Software stack (validated interactively on gcn3, 2026-10-03) -------------
+# jax-cuda12-plugin 0.6.0 is compiled against cuDNN 9.8 -> need cuDNN >= 9.8
+# (2024 stack only ships 9.5, which XLA rejects). 2025 stack has 9.10.1.4.
 module purge
 module load 2024
 module load Python/3.12.3-GCCcore-13.3.0
+module load 2025
+module load CUDA/12.8.0
+module load cuDNN/9.10.1.4-CUDA-12.8.0
 source ~/venvs/crax/bin/activate
 cd ~/CRAX_SRL1
 mkdir -p logs
