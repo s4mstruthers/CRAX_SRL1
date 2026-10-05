@@ -31,6 +31,7 @@ Terminology used in the reports
 """
 import csv
 import glob
+import json
 import math
 import os
 import re
@@ -69,21 +70,24 @@ def num(value) -> Optional[float]:
 def parse_group(group: str) -> Dict:
     """Split a wandb group name into its experimental settings.
 
-    New groups:  safety_<experiment>_<alg>_<env>_L<level>_n<num_envs>[_lr<rate>]
+    New groups:  safety_<experiment>_<alg>_<env>_L<level>_n<num_envs>[_lr<rate> | _<variant>]
+    where <variant> spells out any other extra arguments, e.g.
+    'pid_lambda_mode-absolute-pid_ki-10-pid_kp-10-pid_kd-0' (see run_safety_task.sh).
     The six runs of the first study (30 Sep, before the experiment scripts) are named
     safety_<alg>_<lockstep|desync> and are labelled experiment 'study01'.
     """
-    m = re.match(r"safety_(compare_algos|parallel_envs|long_runs|harder_levels|ant_velocity|lambda_lr|smoke_test)_"
-                 r"(ppo_lag|ppo_pid|ppo_saute|ppo|crpo|focops|p3o)_(.+)_L(\d)_n(\d+)(?:_lr(\d+))?$", group)
+    m = re.match(r"safety_(compare_algos|parallel_envs|long_runs|harder_levels|ant_velocity|lambda_lr|smoke_test|"
+                 r"fixed_baselines|core_rerun|other_tasks|smoke_new|cpo)_"
+                 r"(ppo_lag|ppo_pid|ppo_saute|ppo|crpo|cpo|focops|p3o)_(.+?)_L(\d)_n(\d+)(?:_lr(\d+)|_(.+))?$", group)
     if m:
-        exp, alg, env, level, n, lr = m.groups()
+        exp, alg, env, level, n, lr, variant = m.groups()
         return dict(experiment=exp, alg=alg, env="safe_" + env, level=int(level), num_envs=int(n),
-                    lr=float(lr) if lr else 10.0, sync="desync")
+                    lr=float(lr) if lr else 10.0, sync="desync", variant=variant or "")
     m = re.match(r"safety_(ppo_lag|ppo)_(lockstep|desync)$", group)
     if m:
         alg, sync = m.groups()
         return dict(experiment="study01", alg=alg, env="safe_goal_point", level=1, num_envs=2048,
-                    lr=10.0, sync=sync)
+                    lr=10.0, sync=sync, variant="")
     raise ValueError(f"Unrecognised group name: {group}")
 
 
@@ -139,14 +143,21 @@ class Run:
     # finished (episodic/cost logged). Episodic values are never averaged, so these are
     # exact; the lock-step check uses them to find the episode boundaries.
     episode_end_steps: np.ndarray = None
+    # wandb run summary (<run>.summary.json from download_wandb.py), which holds the final-policy
+    # evaluation: final/final_eval/<stochastic|greedy>/<metric> and the raw .../episode_costs.
+    summary: Dict = field(default_factory=dict)
+
+    def final_eval(self, mode: str, metric: str):
+        """Final-policy metric, e.g. final_eval('greedy', 'violation_rate'); None if not logged."""
+        return self.summary.get(f"final/final_eval/{mode}/{metric}")
 
     def get(self, key: str) -> np.ndarray:
         """Per-update series for `key` (all NaN if the run never logged it)."""
         return self.cols.get(key, np.full(len(self.steps), np.nan))
 
     def __getattr__(self, item):
-        if item in ("experiment", "alg", "env", "level", "num_envs", "lr", "sync"):
-            return self.settings[item]
+        if item in ("experiment", "alg", "env", "level", "num_envs", "lr", "sync", "variant"):
+            return self.settings.get(item, "")
         raise AttributeError(item)
 
 
@@ -174,7 +185,12 @@ def load_runs(exports: str = EXPORTS) -> List[Run]:
         ekeys = set().union(*(r.keys() for r in ev)) if ev else set()
         eval_cols = {k: np.array([np.nan if num(r.get(k)) is None else num(r.get(k)) for r in ev])
                      for k in ekeys if k.startswith("eval/")}
-        runs.append(Run(group=group, name=name, seed=seed, settings=settings,
+        summary_path = os.path.splitext(path)[0] + ".summary.json"
+        summary = {}
+        if os.path.exists(summary_path):
+            with open(summary_path) as fh:
+                summary = json.load(fh)
+        runs.append(Run(group=group, name=name, seed=seed, settings=settings, summary=summary,
                         steps=np.array([num(r["_step"]) / 1e6 for r in keep]), cols=cols,
                         eval_steps=np.array([num(r["_step"]) / 1e6 for r in ev]), eval_cols=eval_cols,
                         n_averaged_dropped=len(upd) - len(keep), episode_end_steps=ends))

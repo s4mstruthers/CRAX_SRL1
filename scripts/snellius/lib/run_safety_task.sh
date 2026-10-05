@@ -75,6 +75,80 @@ define_lambda_lr() {
   done
 }
 
+# 12 Smoke test of the new code (3M steps each): final evaluation, Spoor metrics, every new
+#    option once. Check each log ends with two "[ppo/train] final eval" lines.
+define_smoke_new() {
+  add_task smoke_new 3 ppo_lag  safe_goal_point 1 2048 0 3e6
+  add_task smoke_new 3 ppo      safe_goal_point 1 2048 0 3e6
+  add_task smoke_new 3 ppo_pid  safe_goal_point 1 2048 0 3e6 "--pid_lambda_mode absolute --pid_ki 10 --pid_kp 10 --pid_kd 0"
+  add_task smoke_new 3 p3o      safe_goal_point 1 2048 0 3e6 "--initial_kappa 1 --kappa_decrease_factor 1.0"
+  add_task smoke_new 3 ppo_lag  safe_goal_point 1 2048 0 3e6 "--lagrangian_signal violation_rate --chance_delta 0.05"
+  add_task smoke_new 3 ppo_lag  safe_goal_point 1 2048 0 3e6 "--lagrangian_signal cvar"
+  add_task smoke_new 3 ppo_lag  safe_goal_point 1 2048 0 3e6 "--safety_bound 12.5 --metric_safety_bound 25"
+  add_task smoke_new 3 ppo_saute safe_goal_point 1 2048 0 3e6 "--saute-gamma-budget 1.0"
+  add_task smoke_new 3 ppo_lag  safe_push_point 1 2048 0 3e6 "--episode_length 2000"
+  add_task smoke_new 3 cpo      safe_goal_point 1 2048 0 3e6
+}
+
+# 13 CPO (Achiam et al., 2017): Goal Point L1 x 5 seeds in the setting of experiments 03/10,
+#    and the three other tasks x 3 seeds in the setting of experiment 11.
+define_cpo() {
+  local e s
+  for s in 0 1 2 3 4; do add_task cpo 20 cpo safe_goal_point 1 2048 $s 3e7; done
+  for e in safe_circle_point safe_push_point safe_button_point; do
+    for s in 0 1 2; do add_task cpo 20 cpo $e 1 2048 $s 5e7 "--episode_length 2000"; done
+  done
+}
+
+# 09 Fixed baselines and tail-driven PPO-Lag (Goal Point L1, 30M steps). Each fixes a
+#    problem found in the first batch (summary of findings, Finding 8) or targets the tail.
+define_fixed_baselines() {
+  local s
+  for s in 0 1 2; do
+    # PID as in Stooke et al. (2020): lambda = PID output. Ki = 10 equals PPO-Lag's rate,
+    # so Kp adds proportional damping on top of PPO-Lag.
+    add_task fixed_baselines 20 ppo_pid safe_goal_point 1 2048 $s 3e7 "--pid_lambda_mode absolute --pid_ki 10 --pid_kp 10 --pid_kd 0"
+    add_task fixed_baselines 20 ppo_pid safe_goal_point 1 2048 $s 3e7 "--pid_lambda_mode absolute --pid_ki 10 --pid_kp 50 --pid_kd 0"
+    # P3O: faster kappa ramp without decay (cap 50 after ~41 violating updates, ~11M steps),
+    # and a fixed penalty as in the original method.
+    add_task fixed_baselines 20 p3o safe_goal_point 1 2048 $s 3e7 "--initial_kappa 1 --kappa_decrease_factor 1.0"
+    add_task fixed_baselines 20 p3o safe_goal_point 1 2048 $s 3e7 "--initial_kappa 20 --kappa_increase_factor 1.0 --kappa_decrease_factor 1.0"
+    # Tail-driven PPO-Lag: lambda follows the share of episodes over budget, or their CVaR95.
+    add_task fixed_baselines 20 ppo_lag safe_goal_point 1 2048 $s 3e7 "--lagrangian_signal violation_rate --chance_delta 0.05"
+    add_task fixed_baselines 20 ppo_lag safe_goal_point 1 2048 $s 3e7 "--lagrangian_signal cvar"
+  done
+  for s in 0 1 2 3 4; do
+    # Sauté without the budget discount (CRAX's default 0.99 empties the budget within a step).
+    add_task fixed_baselines 20 ppo_saute safe_goal_point 1 2048 $s 3e7 "--saute-gamma-budget 1.0"
+    # Tighter training target, measured against the real budget 25.
+    add_task fixed_baselines 20 ppo_lag safe_goal_point 1 2048 $s 3e7 "--safety_bound 12.5 --metric_safety_bound 25"
+  done
+}
+
+# 10 Core baselines again with the new metrics (final greedy/stochastic evaluation,
+#    D_norm+, CDF). Same settings as experiment 03, so training curves stay comparable.
+define_core_rerun() {
+  local a s
+  for a in ppo ppo_lag crpo focops; do
+    for s in 0 1 2 3 4; do add_task core_rerun 20 $a safe_goal_point 1 2048 $s 3e7; done
+  done
+}
+
+# 11 Other tasks, in the setting of Spoor et al. (2026): episode length 2000, budget 25,
+#    Level 1. Goal Point at T=2000 is included as a bridge to our T=1000 Goal runs.
+define_other_tasks() {
+  local e a s
+  for e in safe_circle_point safe_push_point safe_button_point; do
+    for a in ppo ppo_lag focops; do
+      for s in 0 1 2; do add_task other_tasks 20 $a $e 1 2048 $s 5e7 "--episode_length 2000"; done
+    done
+    for s in 0 1 2; do
+      add_task other_tasks 20 ppo_pid $e 1 2048 $s 5e7 "--episode_length 2000 --pid_lambda_mode absolute --pid_ki 10 --pid_kp 10 --pid_kd 0"
+    done
+  done
+  for s in 0 1 2; do add_task other_tasks 20 ppo_lag safe_goal_point 1 2048 $s 5e7 "--episode_length 2000"; done
+}
+
 # ---------------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------------
@@ -123,8 +197,15 @@ run_tasks() {
   mkdir -p logs
 
   export CRAX_DESYNC_EPISODES=1
+  # Group-name tag for the extra arguments. "--lagrangian_coef_rate 3" keeps its old
+  # short form (_lr3) so existing groups still match; anything else is spelled out,
+  # e.g. "--initial_kappa 1 --kappa_decrease_factor 1.0" -> _initial_kappa-1-kappa_decrease_factor-1.0
   local tag=""
-  [[ "$extra" == *lagrangian_coef_rate* ]] && tag="_lr${extra##* }"
+  if [[ "$extra" =~ ^--lagrangian_coef_rate\ [^\ ]+$ ]]; then
+    tag="_lr${extra##* }"
+  elif [ -n "$extra" ]; then
+    tag="_$(echo "$extra" | sed -E 's/--//g; s/[^A-Za-z0-9._]+/-/g; s/^-+|-+$//g')"
+  fi
   local group="safety_${experiment}_${alg}_${env#safe_}_L${level}_n${num_envs}${tag}"
   echo "Run ${idx}/${n} (${experiment}): alg=${alg} env=${env} level=${level} envs=${num_envs} seed=${seed} steps=${steps} ${extra} -> wandb group ${group}"
   python -c "import jax; print(jax.devices())"
@@ -139,8 +220,9 @@ run_tasks() {
     --training_metrics_steps 262144 \
     --num_evals "${num_evals}" \
     --safety_bound 25 \
+    --final_eval_episodes "${FINAL_EVAL_EPISODES:-1000}" \
     --seeds "${seed}" \
-    --store_model false --skip_rollout --skip_video --quiet \
+    --store_model "${STORE_MODEL:-false}" --skip_rollout --skip_video --quiet \
     --wandb_project crax-srl \
     --wandb_group "${group}" \
     ${extra}

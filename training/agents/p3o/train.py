@@ -56,6 +56,10 @@ def train(
         initial_kappa: float = 0.01,
         kappa_increase_factor: float = 1.1,
         kappa_max: float = 1000.0,
+        # Factor applied to kappa after an update within budget (floored at initial_kappa).
+        # 0.9 is the CRAX default; since 1.1 * 0.9 < 1, a run over budget half the time
+        # drifts kappa down. initial_kappa=K with both factors 1.0 gives a fixed penalty K.
+        kappa_decrease_factor: float = 0.9,
         # Eval params
         num_evals: int = 0,
         eval_env: Optional[envs.Env] = None,
@@ -93,7 +97,7 @@ def train(
         updated_kappa = jnp.where(
             constraint_violated,
             jnp.minimum(kappa * kappa_increase_factor, kappa_max),
-            jnp.maximum(kappa * 0.9, initial_kappa),
+            jnp.maximum(kappa * kappa_decrease_factor, initial_kappa),
         )
         new_state = training_state.replace(aux_state=(updated_kappa, cost_violation))
         return new_state, {'kappa': updated_kappa, 'cost_violation': cost_violation[0]}

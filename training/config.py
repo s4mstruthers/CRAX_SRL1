@@ -134,11 +134,22 @@ def add_shared_training_args(parser: argparse.ArgumentParser) -> argparse.Argume
     parser.add_argument(
         "--training_metrics_steps", type=float, default=1e6, help="Env steps between training metrics logs"
     )
+    parser.add_argument("--final_eval_episodes", type=int, default=1000,
+                        help="Episodes for the final-policy safety evaluation, run once stochastic and once greedy (0 = off)")
+    parser.add_argument("--metric_safety_bound", type=float, default=None,
+                        help="Budget d used by the safety metrics; defaults to --safety_bound. Set it to evaluate "
+                             "against the real budget when training with a tighter target (e.g. train 12.5, measure 25)")
 
     # --- PPO-Lagrange ---
     parser.add_argument("--safety_bound", type=float, default=25.0, help="Episodic safety constraint bound")
     parser.add_argument("--lagrangian_coef_rate", type=float, default=10.0, help="Lagrange multiplier LR")
     parser.add_argument("--initial_lambda_lagr", type=float, default=0.0, help="Initial lambda value")
+    parser.add_argument("--lagrangian_signal", type=str, default="mean", choices=["mean", "violation_rate", "cvar"],
+                        help="PPO-Lag: what drives lambda (mean cost, share of episodes over budget, or CVaR95 of episode cost)")
+    parser.add_argument("--chance_delta", type=float, default=0.05,
+                        help="PPO-Lag with --lagrangian_signal violation_rate: allowed share of episodes over budget")
+    parser.add_argument("--tail_lagrangian_rate", type=float, default=0.5,
+                        help="PPO-Lag: lambda learning rate for the violation_rate / cvar signals (unitless signal)")
 
     # --- PPO-PID Lagrange ---
     parser.add_argument("--pid_kp", type=float, default=10.0, help="PID: proportional gain")
@@ -147,6 +158,8 @@ def add_shared_training_args(parser: argparse.ArgumentParser) -> argparse.Argume
     parser.add_argument("--pid_integral_clip", type=float, default=1.0, help="PID: anti-windup cap for integral term")
     parser.add_argument("--pid_lambda_clip", type=float, default=1e6, help="PID: clamp for lambda")
     parser.add_argument("--pid_deriv_ema_beta", type=float, default=0.95, help="PID: derivative EMA smoothing")
+    parser.add_argument("--pid_lambda_mode", type=str, default="incremental", choices=["incremental", "absolute"],
+                        help="PID: 'incremental' (CRAX default, lambda += PID output) or 'absolute' (Stooke et al. 2020, lambda = PID output)")
 
     # --- PPO-Saute ---
     parser.add_argument(
@@ -176,6 +189,18 @@ def add_shared_training_args(parser: argparse.ArgumentParser) -> argparse.Argume
     parser.add_argument("--initial_kappa", type=float, default=0.01, help="P3O: initial kappa (cost penalty)")
     parser.add_argument("--kappa_increase_factor", type=float, default=1.1, help="P3O: multiplicative factor for kappa when constraint violated")
     parser.add_argument("--kappa_max", type=float, default=50.0, help="P3O: maximum kappa value")
+    parser.add_argument("--kappa_decrease_factor", type=float, default=0.9,
+                        help="P3O: multiplicative factor for kappa when the constraint is satisfied (1.0 = never decrease)")
+
+    # --- CPO (Achiam et al., 2017) ---
+    parser.add_argument("--cpo_target_kl", type=float, default=0.01,
+                        help="CPO: trust-region size delta (max mean KL between successive policies)")
+    parser.add_argument("--cpo_cg_iters", type=int, default=10, help="CPO: conjugate-gradient iterations")
+    parser.add_argument("--cpo_cg_damping", type=float, default=0.1, help="CPO: damping added to the Fisher-vector product")
+    parser.add_argument("--cpo_backtrack_coeff", type=float, default=0.8, help="CPO: line-search shrink factor")
+    parser.add_argument("--cpo_backtrack_iters", type=int, default=10, help="CPO: line-search steps")
+    parser.add_argument("--cpo_fvp_subsample", type=int, default=1,
+                        help="CPO: use every k-th unroll segment for Fisher-vector products (1 = all)")
 
     # --- CRPO ---
     parser.add_argument("--crpo_eta", type=float, default=0.0,

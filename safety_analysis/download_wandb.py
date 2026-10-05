@@ -11,6 +11,7 @@ a CSV are skipped, so the script can be re-run as more runs finish.
 """
 import argparse
 import csv
+import json
 import os
 
 import wandb
@@ -24,6 +25,15 @@ def export_run(run, out_dir):
     """Write every logged row of one run to <out_dir>/<run name>.csv."""
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{run.name}.csv")
+    # The summary holds the final-policy evaluation (final_eval/... and final/final_eval/...),
+    # which is not part of the history. Written separately so older exports gain it too.
+    summary_path = os.path.join(out_dir, f"{run.name}.summary.json")
+    if run.state == "finished" and not os.path.exists(summary_path):
+        raw = getattr(run.summary, "_json_dict", None) or dict(run.summary)
+        summary = {k: v for k, v in raw.items() if not k.startswith("_")}
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, default=str)
+        print(f"  saved summary -> {summary_path}")
     if os.path.exists(path):
         print(f"  skip (exists): {path}")
         return

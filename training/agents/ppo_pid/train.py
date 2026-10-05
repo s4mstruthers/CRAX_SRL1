@@ -57,6 +57,12 @@ def train(
         pid_integral_clip: float = 1.0,
         pid_lambda_clip: float = 1e6,
         pid_deriv_ema_beta: float = 0.95,
+        # 'incremental' (CRAX default): lambda <- relu(lambda + PID output), which makes the
+        #   P term accumulate like an I term (behaves like PPO-Lag with a larger rate).
+        # 'absolute' (Stooke et al., 2020, Alg. 2): lambda <- relu(PID output), with the
+        #   integral kept non-negative. PPO-Lag is the special case Kp = Kd = 0, Ki = its rate,
+        #   so e.g. Ki = 10 with Kp > 0 adds proportional damping on top of PPO-Lag.
+        pid_lambda_mode: str = 'incremental',
         num_evals: int = 0,
         eval_env: Optional[envs.Env] = None,
         num_eval_envs: int = 128,
@@ -74,6 +80,8 @@ def train(
         init_cost_value_from: str = 'value',
 ):
     """PPO-PID Lagrange training."""
+    if pid_lambda_mode not in ('incremental', 'absolute'):
+        raise ValueError(f"pid_lambda_mode must be 'incremental' or 'absolute', got {pid_lambda_mode!r}")
     per_step_safety_bound = safety_bound / episode_length if episode_length else safety_bound
 
     if network_factory is None:
@@ -85,10 +93,15 @@ def train(
         lambda_lagr, integral, prev_v, deriv_ema = training_state.aux_state
         avg_cost = jnp.mean(metrics["mean_cost"][-1])
         v = (avg_cost - per_step_safety_bound).reshape((1,))
-        new_integral = jnp.clip(integral + v, -pid_integral_clip, pid_integral_clip)
         new_deriv_ema = pid_deriv_ema_beta * deriv_ema + (1.0 - pid_deriv_ema_beta) * (v - prev_v)
-        pid_output = pid_kp * v + pid_ki * new_integral + pid_kd * new_deriv_ema
-        updated_lambda = jnp.clip(jax.nn.relu(lambda_lagr + pid_output), 0.0, pid_lambda_clip)
+        if pid_lambda_mode == 'absolute':
+            new_integral = jnp.clip(integral + v, 0.0, pid_integral_clip)
+            pid_output = pid_kp * v + pid_ki * new_integral + pid_kd * new_deriv_ema
+            updated_lambda = jnp.clip(jax.nn.relu(pid_output), 0.0, pid_lambda_clip)
+        else:
+            new_integral = jnp.clip(integral + v, -pid_integral_clip, pid_integral_clip)
+            pid_output = pid_kp * v + pid_ki * new_integral + pid_kd * new_deriv_ema
+            updated_lambda = jnp.clip(jax.nn.relu(lambda_lagr + pid_output), 0.0, pid_lambda_clip)
         new_state = training_state.replace(aux_state=(updated_lambda, new_integral, v, new_deriv_ema))
         return new_state, {"lambda_lagr": updated_lambda, "pid/violation": v}
 

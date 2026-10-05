@@ -166,7 +166,10 @@ def main():
         # Budget used by the episode-level safety metrics ('safety_ep/frac_over_budget').
         # The safe algorithms do not forward extra kwargs to ppo/train.py, so it is passed
         # through the environment instead.
-        os.environ['CRAX_SAFETY_BOUND'] = str(config.safety_bound)
+        metric_bound = config.metric_safety_bound if config.metric_safety_bound is not None else config.safety_bound
+        os.environ['CRAX_SAFETY_BOUND'] = str(metric_bound)
+        # Size of the final-policy safety evaluation (stochastic + greedy), read by ppo/train.py.
+        os.environ['CRAX_FINAL_EVAL_EPISODES'] = str(config.final_eval_episodes)
 
         # Plain PPO ignores cost when learning, and PPO-Saute folds it into the reward,
         # so neither collects the per-step cost by default. Record it anyway so they get
@@ -219,6 +222,11 @@ def main():
             final_log_data = {}
             for key, value in final_metrics.items():
                 if value is None:
+                    continue
+                # Raw per-episode values of the final evaluation: keep them as lists (they are
+                # needed for the full CDF), instead of reducing them to a mean.
+                if key.endswith('/episode_costs') or key.endswith('/episode_rewards'):
+                    final_log_data[f"final/{key}"] = [round(float(x), 4) for x in np.asarray(value).reshape(-1)]
                     continue
                 try:
                     arr = np.asarray(value, dtype=np.float64)

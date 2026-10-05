@@ -15,6 +15,7 @@ from matplotlib import pyplot as plt
 import wandb
 from crax import envs
 from crax.io import json as brax_json
+from training.agents.cpo import train as cpo
 from training.agents.crpo import train as crpo
 from training.agents.focops import train as focops
 from training.agents.p3o import train as p3o
@@ -142,6 +143,7 @@ def get_algorithm_train_fn(alg_name: str):
         'p3o': p3o,
         'focops': focops,
         'crpo': crpo,
+        'cpo': cpo,
         'sac': sac_train,
         'sac_lag': sac_lag,
         'sac_pid': sac_pid,

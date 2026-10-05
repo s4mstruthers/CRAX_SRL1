@@ -4,6 +4,7 @@ Thin wrapper around the base PPO trainer with Lagrangian constraint handling.
 See: https://arxiv.org/pdf/1707.06347.pdf
 """
 
+import os
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import jax
@@ -56,6 +57,12 @@ def train(
         safety_bound: float = 0.0,
         lagrangian_coef_rate: float = 0.01,
         initial_lambda_lagr: float = 0.0,
+        # What drives lambda: 'mean' (standard, per-step mean cost vs d/T), 'violation_rate'
+        # (share of finished episodes over d vs chance_delta) or 'cvar' (mean of the worst 5%
+        # of finished episodes vs d). The last two use the per-update episode metrics.
+        lagrangian_signal: str = 'mean',
+        chance_delta: float = 0.05,
+        tail_lagrangian_rate: float = 0.5,
         # eval
         num_evals: int = 0,
         eval_env: Optional[envs.Env] = None,
@@ -141,12 +148,37 @@ def train(
             return ppo_networks.make_ppo_networks(
                 obs_size, action_size, cost_value_hidden_layer_sizes=(256,) * 5, **kwargs)
 
+    if lagrangian_signal not in ('mean', 'violation_rate', 'cvar'):
+        raise ValueError(f"lagrangian_signal must be 'mean', 'violation_rate' or 'cvar', got {lagrangian_signal!r}")
+    # The episode metrics (safety_ep/*) are computed against this budget (set by train_env.py
+    # from --metric_safety_bound, default --safety_bound); the cvar signal uses the same one.
+    tail_budget = float(os.environ.get('CRAX_SAFETY_BOUND', safety_bound))
+
     # Define the Lagrange multiplier update function
     def post_step_fn(training_state: TrainingState, metrics: Metrics) -> Tuple[TrainingState, Metrics]:
         """Updates the Lagrange multiplier based on constraint violation."""
-        avg_cost = jnp.mean(metrics['mean_cost'][-1])
-        cost_violation = avg_cost - per_step_safety_bound
-        delta_lambda = cost_violation * lagrangian_coef_rate
+        if lagrangian_signal == 'mean':
+            avg_cost = jnp.mean(metrics['mean_cost'][-1])
+            cost_violation = avg_cost - per_step_safety_bound
+            delta_lambda = cost_violation * lagrangian_coef_rate
+        else:
+            # Tail-driven multiplier: lambda rises while too many episodes (violation_rate)
+            # or the worst 5% of episodes (cvar) exceed the budget. Only the multiplier's
+            # signal changes; the policy loss is the usual lambda-weighted cost advantage.
+            # Needs the per-update episode metrics (safe envs; desynced robots recommended,
+            # otherwise most updates finish no episode and lambda does not move).
+            key = 'safety_ep/frac_over_budget' if lagrangian_signal == 'violation_rate' else 'safety_ep/cost_cvar95'
+            if key not in metrics:
+                raise ValueError(f"lagrangian_signal={lagrangian_signal!r} needs '{key}', which is only "
+                                 "logged on safe_* environments that report an episode cost.")
+            value = metrics[key]
+            if lagrangian_signal == 'violation_rate':
+                cost_violation = value - chance_delta
+            else:
+                cost_violation = (value - tail_budget) / tail_budget
+            # NaN when no (valid) episode finished in this update: leave lambda unchanged.
+            cost_violation = jnp.where(jnp.isfinite(cost_violation), cost_violation, 0.0)
+            delta_lambda = cost_violation * tail_lagrangian_rate
         updated_lambda_lagr = jax.nn.relu(training_state.aux_state + delta_lambda)
         new_training_state = training_state.replace(aux_state=updated_lambda_lagr)
         return new_training_state, {'lambda_lagr': updated_lambda_lagr, 'cost_violation': cost_violation}

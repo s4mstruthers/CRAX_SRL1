@@ -192,6 +192,16 @@ def _remove_pixels(
         return obs
     return {k: v for k, v in obs.items() if not k.startswith('pixels/')}
 
+# Thresholds on the normalised cost deviation D_norm = (c - d) / d at which the empirical
+# CDF is logged (Spoor et al., 2026, Eq. 7). -1 means zero cost, 0 means exactly at the budget.
+CDF_THRESHOLDS = (-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0, 2.0, 4.0)
+
+
+def _threshold_name(k: float) -> str:
+    """Key-safe name for a threshold (wandb treats '.' in keys as nesting): -0.5 -> 'm0p5'."""
+    return f'{k:g}'.replace('-', 'm').replace('.', 'p')
+
+
 def _summarise_update_cost(cost: jnp.ndarray, episode_length: int) -> Dict[str, jnp.ndarray]:
     """Summarise the safety of the policy that collected one batch (runs on the GPU).
 
@@ -269,7 +279,28 @@ def _summarise_completed_episodes(
     nan = jnp.array(jnp.nan)
     has = count > 0
     pick = lambda v: jnp.where(has, v, nan)
+
+    # Metrics of Spoor et al. (2026), so our numbers can be read against theirs.
+    # D_norm: signed distance of the mean cost from the budget, in units of d (> 0 = unsafe).
+    # D_norm+: mean overshoot of the violating episodes only, in units of d (0 if none violate).
+    flat_valid = valid.reshape(-1)
+    excess = jnp.where(flat_valid, jnp.maximum(costs - budget, 0.0), jnp.nan)
+    n_over = jnp.nansum(over)
+    d_norm_plus = jnp.where(n_over > 0, jnp.nansum(excess) / jnp.maximum(n_over, 1.0) / budget, 0.0)
+    zero_cost = jnp.where(flat_valid, (costs <= 0.0).astype(jnp.float32), jnp.nan)
+    # Empirical CDF of D_norm at fixed thresholds. Pooling these over updates, weighted by
+    # safety_ep/count, gives the training-time CDF of Spoor et al. (Eq. 7).
+    d_norm_ep = (costs - budget) / budget
+    cdf = {
+        f'safety_ep/cdf_dnorm_le_{_threshold_name(k)}': pick(jnp.nanmean(
+            jnp.where(flat_valid, (d_norm_ep <= k).astype(jnp.float32), jnp.nan)))
+        for k in CDF_THRESHOLDS
+    }
     return {
+        **cdf,
+        'safety_ep/d_norm': pick((jnp.nanmean(costs) - budget) / budget),
+        'safety_ep/d_norm_plus': pick(d_norm_plus),
+        'safety_ep/frac_zero_cost': pick(jnp.nanmean(zero_cost)),   # episodes with no cost at all
         'safety_ep/count': count.astype(jnp.float32),
         'safety_ep/cost_mean': pick(jnp.nanmean(costs)),
         'safety_ep/cost_p50': pick(quantiles[0]),
@@ -280,6 +311,64 @@ def _summarise_completed_episodes(
         'safety_ep/frac_over_budget': pick(jnp.nanmean(over)),      # share of episodes with cost > d
         'safety_ep/frac_over_2x_budget': pick(jnp.nanmean(over2)),  # share with cost > 2d
     }
+
+
+def _violation_rate_upper_bound(n_over: int, n: int, confidence: float = 0.95) -> float:
+    """One-sided Clopper-Pearson upper bound on the true violation rate.
+
+    With 0 violations in n episodes this is about 3/n ("rule of three"), so 1000 episodes
+    are needed to claim V < 0.3% with 95% confidence.
+    """
+    if n == 0:
+        return float('nan')
+    if n_over >= n:
+        return 1.0
+    try:
+        from scipy.stats import beta
+        return float(beta.ppf(confidence, n_over + 1, n - n_over))
+    except ImportError:  # exact for n_over == 0, which is the case that matters most
+        return float(1.0 - (1.0 - confidence) ** (1.0 / n)) if n_over == 0 else float('nan')
+
+
+def _final_safety_metrics(costs, rewards, budget: float, prefix: str) -> Dict[str, Any]:
+    """Safety of one frozen policy over N complete, fresh evaluation episodes.
+
+    Unlike the training metrics, every episode here is played by a single policy, so these
+    numbers estimate J_c(pi_final) directly. Metric names follow Spoor et al. (2026).
+
+    Args:
+      costs, rewards: total cost / reward of each evaluation episode, shape (N,).
+      budget: the per-episode cost budget d.
+      prefix: key prefix, e.g. 'final_eval/greedy'.
+    """
+    costs = np.asarray(costs, dtype=np.float64).reshape(-1)
+    rewards = np.asarray(rewards, dtype=np.float64).reshape(-1)
+    n = costs.size
+    over = costs > budget
+    n_over = int(over.sum())
+    q50, q90, q95, q99 = np.quantile(costs, [0.5, 0.9, 0.95, 0.99])
+    d_norm = (costs - budget) / budget
+    m = {
+        'num_episodes': n,
+        'reward_mean': rewards.mean(),
+        'cost_mean': costs.mean(),
+        'violation_rate': over.mean(),                                    # V
+        'violation_rate_upper95': _violation_rate_upper_bound(n_over, n),
+        'd_norm': (costs.mean() - budget) / budget,                       # D_norm
+        'd_norm_plus': float((costs[over] - budget).mean() / budget) if n_over else 0.0,  # D_norm+
+        'frac_over_2x_budget': (costs > 2 * budget).mean(),
+        'frac_zero_cost': (costs <= 0.0).mean(),
+        'cost_p50': q50, 'cost_p90': q90, 'cost_p99': q99,
+        'cost_cvar95': costs[costs >= q95].mean(),                        # mean of the worst 5%
+        'cost_max': costs.max(),
+        **{f'cdf_dnorm_le_{_threshold_name(k)}': (d_norm <= k).mean() for k in CDF_THRESHOLDS},
+    }
+    out = {f'{prefix}/{k}': float(v) for k, v in m.items()}
+    # Raw per-episode values, so the full CDF can be drawn later (train_env.py stores these
+    # in the wandb run summary as lists instead of averaging them).
+    out[f'{prefix}/episode_costs'] = costs.astype(np.float32)
+    out[f'{prefix}/episode_rewards'] = rewards.astype(np.float32)
+    return out
 
 
 def train(
@@ -339,6 +428,10 @@ def train(
         post_step_fn: Optional[PostStepFn] = None,
         extra_fields: Tuple[str, ...] = ('truncation', 'episode_metrics', 'episode_done'),
         init_aux_state_fn: Optional[Callable[[], Any]] = None,
+        # Optional full-batch policy update run before the minibatch SGD (used by CPO):
+        # fn(params, normalizer_params, data, key, *, ppo_network, pmap_axis_name)
+        #   -> (new_policy_params, metrics). The SGD then starts from the updated policy.
+        policy_update_fn: Optional[Callable] = None,
 ):
     """PPO training.
 
@@ -597,6 +690,12 @@ def train(
             new_params = optax.apply_updates(params, updates)
             return (loss, metrics), new_params, new_optimizer_state
 
+    if policy_update_fn is not None:
+        if ppo_network.encoder_network is not None:
+            raise NotImplementedError('policy_update_fn (CPO) does not support a shared vision encoder.')
+        policy_update_fn = functools.partial(
+            policy_update_fn, ppo_network=ppo_network, pmap_axis_name=pmap_axis_name)
+
     metrics_aggregator = metric_logger.MetricsLogger(
         buffer_size=buffer_size,
         steps_between_logging=training_metrics_steps,
@@ -739,14 +838,25 @@ def train(
             pmap_axis_name=pmap_axis_name,
         )
 
+        # Optional full-batch policy update (CPO's trust-region step), on pi_k's batch and
+        # before the minibatch SGD; the SGD then fits the value functions from there.
+        sgd_start_params = training_state.params
+        policy_update_metrics = {}
+        if policy_update_fn is not None:
+            key_sgd, key_policy_update = jax.random.split(key_sgd)
+            new_policy_params, policy_update_metrics = policy_update_fn(
+                training_state.params, normalizer_params, data, key_policy_update)
+            sgd_start_params = training_state.params.replace(policy=new_policy_params)
+
         (optimizer_state, params, _), metrics = jax.lax.scan(
             functools.partial(
                 sgd_step, data=data, normalizer_params=normalizer_params, aux_state=training_state.aux_state
             ),
-            (training_state.optimizer_state, training_state.params, key_sgd),
+            (training_state.optimizer_state, sgd_start_params, key_sgd),
             (),
             length=num_updates_per_batch,
         )
+        metrics = {**metrics, **policy_update_metrics}
 
         new_training_state = TrainingState(
             optimizer_state=optimizer_state,
@@ -756,12 +866,14 @@ def train(
             aux_state=training_state.aux_state,
         )
 
+        # The safety summary of pi_k is merged first, so that post_step_fn can drive the
+        # multiplier from it (e.g. PPO-Lag with --lagrangian_signal violation_rate / cvar).
+        metrics = {**metrics, **update_safety_metrics}
+
         # Apply post-step hook if provided (for Lagrange multiplier updates, etc.)
         if post_step_fn is not None:
             new_training_state, extra_metrics = post_step_fn(new_training_state, metrics)
             metrics = {**metrics, **extra_metrics}
-        
-        metrics = {**metrics, **update_safety_metrics}
         
         if log_training_metrics:
             jax.debug.callback(
@@ -934,6 +1046,9 @@ def train(
     )
     _dbg("Training state replicated.")
 
+    # Unwrapped eval env, kept for the final-policy safety evaluation below.
+    raw_eval_env = eval_env or environment
+
     # Only create evaluator if evaluation is enabled
     evaluator = None
     if num_evals > 0:
@@ -1059,6 +1174,42 @@ def train(
         metrics = {'training/final_step': total_steps}
         if training_metrics:
             metrics.update(training_metrics)
+
+    # Final-policy safety evaluation (Spoor et al., 2026): N fresh, complete episodes of the
+    # frozen final policy, once with exploration noise (stochastic) and once greedy
+    # (deterministic). Set by training/train_env.py from --final_eval_episodes (0 = off).
+    final_eval_episodes = int(os.environ.get('CRAX_FINAL_EVAL_EPISODES', '0'))
+    if process_id == 0 and final_eval_episodes > 0:
+        budget = float(os.environ.get('CRAX_SAFETY_BOUND', '25'))
+        final_key = jax.random.PRNGKey(seed + 1_000_003)   # separate stream from training/eval
+        wrap_key, final_key = jax.random.split(final_key)
+        final_env = _maybe_wrap_env(
+            raw_eval_env, wrap_env, final_eval_episodes, episode_length, action_repeat,
+            device_count=1, key_env=wrap_key, wrap_env_fn=wrap_env_fn,
+            randomization_fn=randomization_fn, vision_kwargs=vision_kwargs,
+        )
+        for mode, deterministic in (('stochastic', False), ('greedy', True)):
+            final_key, mode_key = jax.random.split(final_key)
+            final_evaluator = acting.Evaluator(
+                final_env,
+                functools.partial(make_policy, deterministic=deterministic),
+                num_eval_envs=final_eval_episodes,
+                episode_length=episode_length,
+                action_repeat=action_repeat,
+                key=mode_key,
+            )
+            raw = final_evaluator.run_evaluation(params, training_metrics={}, aggregate_episodes=False)
+            if 'eval/episode_cost' not in raw:
+                print('[ppo/train] final evaluation skipped: the environment reports no cost')
+                break
+            final_metrics = _final_safety_metrics(
+                raw['eval/episode_cost'], raw['eval/episode_reward'], budget, f'final_eval/{mode}')
+            metrics = {**metrics, **final_metrics}
+            print(f"[ppo/train] final eval ({mode}, {final_eval_episodes} episodes): "
+                  f"cost {final_metrics[f'final_eval/{mode}/cost_mean']:.2f}, "
+                  f"V {final_metrics[f'final_eval/{mode}/violation_rate']:.3f} "
+                  f"(95% upper {final_metrics[f'final_eval/{mode}/violation_rate_upper95']:.3f}), "
+                  f"D_norm+ {final_metrics[f'final_eval/{mode}/d_norm_plus']:.3f}")
 
     logging.info('total steps: %s', total_steps)
     pmap.synchronize_hosts()
