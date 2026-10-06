@@ -184,15 +184,51 @@ run_tasks() {
   local experiment num_evals alg env level num_envs seed steps extra
   IFS='|' read -r experiment num_evals alg env level num_envs seed steps extra <<< "${TASKS[$idx]}"
 
-  module purge
-  module load 2024
-  module load Python/3.12.3-GCCcore-13.3.0
-  # CUDA stack for jax: the plugin is compiled against cuDNN 9.8+, and the 2024
-  # stack only ships cuDNN 9.5 (XLA rejects it). Validated on gcn3, 2026-10-03.
-  module load 2025
-  module load CUDA/12.8.0
-  module load cuDNN/9.10.1.4-CUDA-12.8.0
-  source ~/venvs/crax/bin/activate
+  # ---- Software stack, with a GPU check before any training starts ----
+  # Group members' venvs differ: a venv installed with `pip install -e ".[train,cuda]"`
+  # bundles NVIDIA's CUDA libraries and runs on the 2024 stack alone (loading the system
+  # CUDA modules on top made JAX fail to load cuSPARSE and fall back to the CPU, 5 Oct).
+  # A venv without them needs CUDA 12.8 + cuDNN >= 9.8 from the 2025 stack (the 2024
+  # stack's cuDNN 9.5 is rejected by XLA; validated on gcn3, 3 Oct). So: try the 2024
+  # stack, fall back to the 2025 CUDA modules, and stop if JAX still cannot use the GPU,
+  # instead of silently training on the CPU while the GPU is billed.
+  # Force one setup with CRAX_CUDA_STACK=2024 or CRAX_CUDA_STACK=2025.
+  load_stack() {
+    module purge
+    module load 2024
+    module load Python/3.12.3-GCCcore-13.3.0
+    if [ "$1" = "2025" ]; then
+      module load 2025
+      module load CUDA/12.8.0
+      module load cuDNN/9.10.1.4-CUDA-12.8.0
+    fi
+    source ~/venvs/crax/bin/activate
+  }
+  gpu_ok() {
+    # Exit 0 only if JAX runs on the GPU, including a convolution (which needs cuDNN).
+    python - <<'PY' > /dev/null 2>&1
+import sys
+import jax, jax.numpy as jnp
+if jax.default_backend() != "gpu":
+    sys.exit(1)
+x, k = jnp.ones((1, 1, 8, 8)), jnp.ones((1, 1, 3, 3))
+jax.lax.conv(x, k, (1, 1), "SAME").block_until_ready()
+(jnp.ones((256, 256)) @ jnp.ones((256, 256))).block_until_ready()
+PY
+  }
+  local stack ok=""
+  for stack in ${CRAX_CUDA_STACK:-2024 2025}; do
+    load_stack "$stack"
+    if gpu_ok; then ok="$stack"; break; fi
+    echo "JAX cannot use the GPU with the ${stack} software stack."
+  done
+  if [ -z "$ok" ]; then
+    echo "ERROR: JAX cannot use the GPU with any software stack. Stopping before training,"
+    echo "so no GPU time is spent on a CPU run. JAX reports:"
+    python -c "import jax; print(jax.devices())" 2>&1 | tail -n 5
+    exit 1
+  fi
+  echo "GPU check passed with the ${ok} software stack."
   cd "${REPO}"
   mkdir -p logs
 
