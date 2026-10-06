@@ -47,7 +47,8 @@ def test_matches_numpy_on_valid_episodes():
     assert math.isclose(out["safety_ep/cost_p90"], q[1], rel_tol=1e-4)
     assert math.isclose(out["safety_ep/cost_p99"], q[3], rel_tol=1e-4)
     assert math.isclose(out["safety_ep/cost_max"], ref.max(), rel_tol=1e-4)
-    assert math.isclose(out["safety_ep/cost_cvar95"], ref[ref >= q[2]].mean(), rel_tol=1e-4)
+    k = max(1, math.ceil(0.05 * len(ref)))
+    assert math.isclose(out["safety_ep/cost_cvar95"], np.sort(ref)[-k:].mean(), rel_tol=1e-4)
     assert math.isclose(out["safety_ep/frac_over_budget"], (ref > D).mean(), rel_tol=1e-4)
     assert math.isclose(out["safety_ep/frac_over_2x_budget"], (ref > 2 * D).mean(), rel_tol=1e-4)
     # Spoor et al. (2026) metrics
@@ -91,7 +92,7 @@ def test_final_safety_metrics_against_numpy():
     assert math.isclose(m["final_eval/greedy/violation_rate"], over.mean())
     assert math.isclose(m["final_eval/greedy/d_norm"], (costs.mean() - D) / D)
     assert math.isclose(m["final_eval/greedy/d_norm_plus"], (costs[over] - D).mean() / D)
-    assert math.isclose(m["final_eval/greedy/cost_cvar95"], costs[costs >= np.quantile(costs, 0.95)].mean())
+    assert math.isclose(m["final_eval/greedy/cost_cvar95"], np.sort(costs)[-50:].mean())   # worst 5% of 1000
     assert m["final_eval/greedy/violation_rate_upper95"] > m["final_eval/greedy/violation_rate"]
     assert m["final_eval/greedy/episode_costs"].shape == (1000,)
 
@@ -103,3 +104,20 @@ def test_zero_violations_upper_bound_is_rule_of_three():
         assert 2.9 / n < ub < 3.1 / n
     m = _final_safety_metrics(np.zeros(100), np.zeros(100), D, "x")
     assert m["x/violation_rate"] == 0.0 and m["x/d_norm_plus"] == 0.0 and m["x/frac_zero_cost"] == 1.0
+
+
+def test_cvar_is_correct_when_most_episodes_have_zero_cost():
+    # 96% zero-cost episodes (as for a safe greedy policy): the 95th percentile is 0, so a
+    # "cost >= percentile" rule would return the plain mean. CVaR95 must average the worst 5%.
+    costs = np.zeros(200)
+    costs[:2] = [240.0, 235.0]
+    costs[2:8] = 5.0
+    m = _final_safety_metrics(costs, np.zeros(200), D, "g")
+    assert math.isclose(m["g/cost_cvar95"], np.sort(costs)[-10:].mean())          # (240+235+6*5+0+0)/10
+    assert m["g/cost_cvar95"] > 10 * m["g/cost_mean"]
+    # Same for the per-update episode metric (JAX version).
+    R2, T2, E2 = 1, 1, 200
+    c = jnp.asarray(costs, jnp.float32).reshape(R2, T2, E2)
+    full = jnp.full((R2, T2, E2), 999.0)
+    out = {k: float(v) for k, v in summarise(c, full, jnp.ones((R2, T2, E2)), jnp.ones((R2, T2, E2)), L, D).items()}
+    assert math.isclose(out["safety_ep/cost_cvar95"], np.sort(costs)[-10:].mean(), rel_tol=1e-5)

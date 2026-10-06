@@ -273,7 +273,14 @@ def _summarise_completed_episodes(
     count = jnp.sum(valid)
 
     quantiles = jnp.nanquantile(costs, jnp.array([0.5, 0.9, 0.95, 0.99]))
-    worst5 = jnp.where(costs >= quantiles[2], costs, jnp.nan)   # worst 5% of episodes
+    # CVaR95: mean of the worst ceil(5% of count) episodes. Selecting by rank, not by
+    # "cost >= 95th percentile", keeps it correct when many episodes tie (e.g. when
+    # over 95% of episodes have zero cost, the percentile is 0 and the threshold rule
+    # would average every episode).
+    k_worst = jnp.maximum(1.0, jnp.ceil(0.05 * count))
+    descending = -jnp.sort(-jnp.where(jnp.isnan(costs), -jnp.inf, costs))   # invalid entries last
+    in_worst = jnp.arange(descending.shape[0]) < k_worst
+    cvar95 = jnp.sum(jnp.where(in_worst, descending, 0.0)) / k_worst
     over = jnp.where(valid.reshape(-1), (costs > budget).astype(jnp.float32), jnp.nan)
     over2 = jnp.where(valid.reshape(-1), (costs > 2 * budget).astype(jnp.float32), jnp.nan)
     nan = jnp.array(jnp.nan)
@@ -307,7 +314,7 @@ def _summarise_completed_episodes(
         'safety_ep/cost_p90': pick(quantiles[1]),
         'safety_ep/cost_p99': pick(quantiles[3]),
         'safety_ep/cost_max': pick(jnp.nanmax(costs)),
-        'safety_ep/cost_cvar95': pick(jnp.nanmean(worst5)),
+        'safety_ep/cost_cvar95': pick(cvar95),
         'safety_ep/frac_over_budget': pick(jnp.nanmean(over)),      # share of episodes with cost > d
         'safety_ep/frac_over_2x_budget': pick(jnp.nanmean(over2)),  # share with cost > 2d
     }
@@ -359,7 +366,7 @@ def _final_safety_metrics(costs, rewards, budget: float, prefix: str) -> Dict[st
         'frac_over_2x_budget': (costs > 2 * budget).mean(),
         'frac_zero_cost': (costs <= 0.0).mean(),
         'cost_p50': q50, 'cost_p90': q90, 'cost_p99': q99,
-        'cost_cvar95': costs[costs >= q95].mean(),                        # mean of the worst 5%
+        'cost_cvar95': np.sort(costs)[-max(1, int(np.ceil(0.05 * n))):].mean(),  # mean of the worst 5% (by rank)
         'cost_max': costs.max(),
         **{f'cdf_dnorm_le_{_threshold_name(k)}': (d_norm <= k).mean() for k in CDF_THRESHOLDS},
     }

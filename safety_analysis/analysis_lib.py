@@ -148,8 +148,15 @@ class Run:
     summary: Dict = field(default_factory=dict)
 
     def final_eval(self, mode: str, metric: str):
-        """Final-policy metric, e.g. final_eval('greedy', 'violation_rate'); None if not logged."""
-        return self.summary.get(f"final/final_eval/{mode}/{metric}")
+        """Final-policy metric, e.g. final_eval('greedy', 'violation_rate'); None if not logged.
+
+        For 'episode_costs' / 'episode_rewards' this returns the per-episode list: wandb
+        stores long lists as {'_type': 'large-array', 'value': [...]}, which is unwrapped here.
+        """
+        value = self.summary.get(f"final/final_eval/{mode}/{metric}")
+        if isinstance(value, dict) and "value" in value:
+            value = value["value"]
+        return value
 
     def get(self, key: str) -> np.ndarray:
         """Per-update series for `key` (all NaN if the run never logged it)."""
