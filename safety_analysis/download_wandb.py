@@ -13,6 +13,8 @@ import argparse
 import csv
 import json
 import os
+import shutil
+import tempfile
 
 import wandb
 
@@ -34,6 +36,17 @@ def export_run(run, out_dir):
         with open(summary_path, "w") as f:
             json.dump(summary, f, default=str)
         print(f"  saved summary -> {summary_path}")
+    # Raw per-episode costs/rewards of the final evaluation (runs from 6 Oct on), a file
+    # attached to the run. Older runs do not have it; that is not an error.
+    episodes_path = os.path.join(out_dir, f"{run.name}.final_eval_episodes.npz")
+    if run.state == "finished" and not os.path.exists(episodes_path):
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                run.file("final_eval_episodes.npz").download(root=tmp, replace=True)
+                shutil.move(os.path.join(tmp, "final_eval_episodes.npz"), episodes_path)
+            print(f"  saved per-episode final evaluation -> {episodes_path}")
+        except Exception:
+            pass
     if os.path.exists(path):
         print(f"  skip (exists): {path}")
         return

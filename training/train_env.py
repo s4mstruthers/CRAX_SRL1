@@ -220,13 +220,15 @@ def main():
         # step count up) and would mix averaged values into the per-update curves.
         if use_wandb and wandb.run is not None and final_metrics:
             final_log_data = {}
+            episode_arrays = {}
             for key, value in final_metrics.items():
                 if value is None:
                     continue
-                # Raw per-episode values of the final evaluation: keep them as lists (they are
-                # needed for the full CDF), instead of reducing them to a mean.
+                # Raw per-episode values of the final evaluation (needed for the full CDF). They
+                # go into a file attached to the run: wandb keeps long lists in the summary only
+                # up to a size limit (1000-value lists came back empty on 6 Oct).
                 if key.endswith('/episode_costs') or key.endswith('/episode_rewards'):
-                    final_log_data[f"final/{key}"] = [round(float(x), 4) for x in np.asarray(value).reshape(-1)]
+                    episode_arrays[key.replace('/', '__')] = np.asarray(value, dtype=np.float32).reshape(-1)
                     continue
                 try:
                     arr = np.asarray(value, dtype=np.float64)
@@ -237,6 +239,11 @@ def main():
                 final_log_data[f"final/{key}"] = float(np.nanmean(arr)) if arr.ndim > 0 else float(arr)
             if final_log_data:
                 wandb.run.summary.update(final_log_data)
+            if episode_arrays:
+                # e.g. final_eval__greedy__episode_costs; read back by safety_analysis/download_wandb.py
+                episodes_path = os.path.join(wandb.run.dir, 'final_eval_episodes.npz')
+                np.savez_compressed(episodes_path, **episode_arrays)
+                wandb.save(episodes_path, base_path=wandb.run.dir, policy='now')
 
         if not config.skip_rollout:
             print(f"\nPerforming rollout evaluation...")

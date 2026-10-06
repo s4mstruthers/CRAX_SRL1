@@ -5,10 +5,10 @@ Everything here runs on a laptop; it only reads the exported CSV files.
 
 | File | What it does |
 |---|---|
-| `download_wandb.py` | Exports every run in wandb groups starting with `safety` to `wandb_exports/<group>/<run>.csv` (one row per logged wandb row). Runs that already have a CSV are skipped. |
+| `download_wandb.py` | Exports every run in wandb groups starting with `safety` to `wandb_exports/<group>/<run>.csv` (one row per logged wandb row), plus `<run>.summary.json` (the final-policy evaluation) and, for runs from 6 Oct on, `<run>.final_eval_episodes.npz` (raw per-episode final-evaluation costs and rewards). Files that already exist are skipped. |
 | `summarise_runs.py` | Quick one-line-per-run summary (standard library only) written to `run_summary.csv`. |
 | `analysis_lib.py` | Shared loading, cleaning and metric definitions. The figures and the quoted numbers both use it, so they cannot disagree. |
-| `make_figures.py` | Draws all 21 figures of the in-depth report to `figures/figNN_*.png` (`--pdf` also writes vector PDFs for the paper). `NN` is the figure number in the report. |
+| `make_figures.py` | Draws all 33 figures to `figures/figNN_*.png` (`--pdf` also writes vector PDFs for the paper): fig01-fig21 are the first in-depth report (first-batch runs only), fig22-fig33 the second batch (see below). |
 | `key_numbers.py` | Prints every number quoted in the reports and writes them to `figures/key_numbers.json`. |
 
 `wandb_exports/`, `figures/` and `*.csv` are git-ignored: they are large or can be regenerated.
@@ -37,6 +37,33 @@ What to expect on another computer:
 * A full run of `make_figures.py` deletes `figNN_*` files that no current figure writes.
   Figure numbers shifted when figures were added, so an old file could otherwise be
   mistaken for the new figure with the same number.
+
+## Second batch (6 Oct): figures 22-33
+
+Experiments `core_rerun` (10), `fixed_baselines` (09), `cpo` (13) and `other_tasks` (11). The
+first report's figures and `key_numbers.py` never use these runs (`analysis_lib.batch1`), so
+they stay exactly as before.
+
+| Figure | Shows |
+|---|---|
+| fig22_final_eval_goal | Final policy on Goal Point L1, all 13 methods: V, mean cost, D_norm+, reward; stochastic (open) vs greedy (filled) |
+| fig23_cdfs | CDF of D_norm (Spoor et al. Fig. 2 style): during training vs final stochastic vs final greedy; methods and variants |
+| fig24_training_vs_final | Per run: % of training episodes over budget vs % of final greedy episodes over budget (all tasks) |
+| fig25_safety_tiers | Spoor et al. safety tiers (0-4) with D_norm, V, D_norm+, during training and for the final greedy policy |
+| fig26_fixed_baselines | Fixed baselines vs their CRAX defaults (PID, P3O, Saute, tighter target, tail-driven λ): cost and reward |
+| fig27_fixed_penalties | λ / κ of the fixed baselines |
+| fig28_cpo_diagnostics | CPO vs PPO-Lag/FOCOPS (cost, reward), share of updates per optimisation case, line search, KL, constraint value c |
+| fig29_tasks_curves | Circle, Push, Button (T = 2000): cost and reward per update; Goal Point PPO-Lag with T = 1000 vs 2000 |
+| fig30_tasks_final | Final policy on the other tasks: V, D_norm+, reward; stochastic vs greedy |
+| fig31_tails_goal | Worst cases on Goal Point L1: training p99 (final quarter), final CVaR95 and worst episode |
+| fig32_tradeoff_final | Final greedy reward vs V, per task |
+| fig33_reproducibility | First batch (03) vs rerun (10) with identical settings |
+
+Notes: the final-policy CDF uses the 9 logged thresholds (dots), because wandb dropped the raw
+1000-value lists of this batch; runs from 6 Oct on also attach the raw values as a file.
+`safety_ep/cost_cvar95` is computed by rank since commit e50cf04 (the earlier threshold rule
+returned the mean when >95% of episodes had zero cost; first-batch values are essentially
+unaffected).
 
 ## How the data is cleaned (analysis_lib.py)
 

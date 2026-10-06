@@ -55,7 +55,28 @@ PENALTY_KEY = {
 }
 
 ALG_LABEL = {"ppo": "PPO (no constraint)", "ppo_lag": "PPO-Lag", "ppo_pid": "PPO-PID", "crpo": "CRPO",
-             "focops": "FOCOPS", "p3o": "P3O", "ppo_saute": "PPO-Saute"}
+             "focops": "FOCOPS", "p3o": "P3O", "ppo_saute": "PPO-Saute", "cpo": "CPO"}
+
+# Experiments of the first batch (30 Sep 2026). The first report's figures (fig01-fig21)
+# and key_numbers.py use only these, so adding later experiments never changes them.
+BATCH1_EXPERIMENTS = {"study01", "compare_algos", "parallel_envs", "long_runs", "harder_levels",
+                      "ant_velocity", "lambda_lr"}
+
+
+def batch1(runs):
+    """Only the runs of the first batch (see BATCH1_EXPERIMENTS)."""
+    return [r for r in runs if r.experiment in BATCH1_EXPERIMENTS]
+
+
+# Thresholds on D_norm = (c - d) / d at which the episode-cost CDF is logged, per update
+# (training/safety_ep/cdf_dnorm_le_<name>) and for the final policy
+# (final/final_eval/<mode>/cdf_dnorm_le_<name>). Same list as in training/agents/ppo/train.py.
+CDF_THRESHOLDS = (-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0, 2.0, 4.0)
+
+
+def threshold_name(k: float) -> str:
+    """Key-safe threshold name used in the logged keys: -0.5 -> 'm0p5'."""
+    return f"{k:g}".replace("-", "m").replace(".", "p")
 
 
 def num(value) -> Optional[float]:
@@ -146,6 +167,9 @@ class Run:
     # wandb run summary (<run>.summary.json from download_wandb.py), which holds the final-policy
     # evaluation: final/final_eval/<stochastic|greedy>/<metric> and the raw .../episode_costs.
     summary: Dict = field(default_factory=dict)
+    # Raw per-episode final-evaluation values (<run>.final_eval_episodes.npz, runs from 6 Oct
+    # on), keyed like 'final_eval__greedy__episode_costs'.
+    episodes: Dict = field(default_factory=dict)
 
     def final_eval(self, mode: str, metric: str):
         """Final-policy metric, e.g. final_eval('greedy', 'violation_rate'); None if not logged.
@@ -153,9 +177,12 @@ class Run:
         For 'episode_costs' / 'episode_rewards' this returns the per-episode list: wandb
         stores long lists as {'_type': 'large-array', 'value': [...]}, which is unwrapped here.
         """
+        file_key = f"final_eval__{mode}__{metric}"
+        if file_key in self.episodes:
+            return list(self.episodes[file_key])
         value = self.summary.get(f"final/final_eval/{mode}/{metric}")
         if isinstance(value, dict) and "value" in value:
-            value = value["value"]
+            value = value["value"] or None          # wandb returns [] for lists above its size limit
         return value
 
     def get(self, key: str) -> np.ndarray:
@@ -197,7 +224,12 @@ def load_runs(exports: str = EXPORTS) -> List[Run]:
         if os.path.exists(summary_path):
             with open(summary_path) as fh:
                 summary = json.load(fh)
-        runs.append(Run(group=group, name=name, seed=seed, settings=settings, summary=summary,
+        episodes_path = os.path.splitext(path)[0] + ".final_eval_episodes.npz"
+        episodes = {}
+        if os.path.exists(episodes_path):
+            with np.load(episodes_path) as data:
+                episodes = {k: data[k] for k in data.files}
+        runs.append(Run(group=group, name=name, seed=seed, settings=settings, summary=summary, episodes=episodes,
                         steps=np.array([num(r["_step"]) / 1e6 for r in keep]), cols=cols,
                         eval_steps=np.array([num(r["_step"]) / 1e6 for r in ev]), eval_cols=eval_cols,
                         n_averaged_dropped=len(upd) - len(keep), episode_end_steps=ends))
@@ -295,6 +327,68 @@ def run_metrics(run: Run, max_step_m: Optional[float] = None, budget: float = BU
         "penalty_zero_pct": float(np.mean(pen[np.isfinite(pen)] == 0) * 100) if np.isfinite(pen).any() else np.nan,
         "sps_median": float(np.nanmedian(sps)) if np.isfinite(sps).any() else np.nan,
     }
+
+
+# ---------------------------------------------------------------------------------
+# Metrics of Spoor et al. (2026): training-time and final-policy, and safety tiers
+# ---------------------------------------------------------------------------------
+def training_cdf(run: Run, max_step_m: Optional[float] = None) -> np.ndarray:
+    """Training-time CDF of D_norm at CDF_THRESHOLDS, pooled over all finished episodes.
+
+    Each update's logged CDF is weighted by the number of episodes that finished in it.
+    NaN everywhere if the run did not log the CDF (runs before 5 Oct 2026).
+    """
+    sel = np.ones(len(run.steps), bool) if max_step_m is None else run.steps <= max_step_m + 1e-9
+    count = run.get("training/safety_ep/count")[sel]
+    out = []
+    for k in CDF_THRESHOLDS:
+        f = run.get(f"training/safety_ep/cdf_dnorm_le_{threshold_name(k)}")[sel]
+        ok = np.isfinite(f) & np.isfinite(count) & (count > 0)
+        out.append(float(np.sum(f[ok] * count[ok]) / np.sum(count[ok])) if ok.any() else np.nan)
+    return np.array(out)
+
+
+def final_cdf(run: Run, mode: str) -> np.ndarray:
+    """Final-policy CDF of D_norm at CDF_THRESHOLDS (mode 'stochastic' or 'greedy')."""
+    vals = [run.final_eval(mode, f"cdf_dnorm_le_{threshold_name(k)}") for k in CDF_THRESHOLDS]
+    return np.array([np.nan if v is None else float(v) for v in vals])
+
+
+def spoor_metrics(run: Run, max_step_m: Optional[float] = None) -> Dict[str, float]:
+    """D_norm, V and D_norm+ over training (averaged over updates) and for the final greedy policy.
+
+    Training values follow Spoor et al. (Eq. 6): the per-update metric, averaged over all
+    updates with finished episodes (the first ~2M steps have none, because shortened
+    first episodes are excluded).
+    """
+    sel = np.ones(len(run.steps), bool) if max_step_m is None else run.steps <= max_step_m + 1e-9
+
+    def mean_of(key):
+        v = run.get(key)[sel]
+        v = v[np.isfinite(v)]
+        return float(np.mean(v)) if len(v) else np.nan
+
+    def fin(metric):
+        v = run.final_eval("greedy", metric)
+        return np.nan if v is None else float(v)
+
+    return {"train_d_norm": mean_of("training/safety_ep/d_norm"),
+            "train_v": mean_of("training/safety_ep/frac_over_budget"),
+            "train_d_norm_plus": mean_of("training/safety_ep/d_norm_plus"),
+            "final_d_norm": fin("d_norm"), "final_v": fin("violation_rate"), "final_d_norm_plus": fin("d_norm_plus")}
+
+
+def safety_tier(d_norm: float, v: float, d_norm_plus: float) -> int:
+    """Safety tier 0-4 of Spoor et al. (2026, Table 1) from D_norm, V and D_norm+."""
+    if not np.isfinite(d_norm) or d_norm > 0:
+        return 0
+    if v == 0 and d_norm_plus == 0:
+        return 4
+    if v <= 0.1 and d_norm_plus <= 0.1:
+        return 3
+    if v <= 0.5:
+        return 2
+    return 1
 
 
 def group_metrics(runs: List[Run], **kw) -> Dict[str, Dict[str, float]]:

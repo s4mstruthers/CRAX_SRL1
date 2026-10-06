@@ -466,7 +466,9 @@ def _jsonable(x):
 
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else ""
-    runs = A.load_runs()
+    # The numbers of the first-batch report: first-batch runs only, so later experiments
+    # (core_rerun, fixed_baselines, cpo, other_tasks) never change them.
+    runs = A.batch1(A.load_runs())
     print(f"Loaded {len(runs)} runs from {A.EXPORTS}")
     np.seterr(all="ignore")
     import warnings
