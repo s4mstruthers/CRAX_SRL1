@@ -1,7 +1,7 @@
-"""Produce every figure in the training-time safety reports.
+"""Produce the figures of the training-time safety paper (2AMM20, Oct 2026).
 
 Usage (repo folder, crax env active; needs numpy + matplotlib):
-    python safety_analysis/make_figures.py            # all 33 figures -> safety_analysis/figures/*.png
+    python safety_analysis/make_figures.py            # all paper figures -> safety_analysis/figures/*.png
     python safety_analysis/make_figures.py fig07      # only figures whose name starts with fig07
     python safety_analysis/make_figures.py --pdf      # also write vector PDFs (for the paper)
 
@@ -13,9 +13,10 @@ Conventions used in every plot
   * dashed black line = budget d = 25 per episode;
   * thin lines = individual seeds, thick line = mean over seeds;
   * dots in dot plots = individual seeds, short horizontal bar = mean over seeds;
-  * algorithm-comparison plots (figures 3-9) stop at 30.2M steps, so that PPO-Saute
+  * algorithm-comparison plots (figures 3, 5, 6, 9) stop at 30.2M steps, so that PPO-Saute
     (which trained for 30M steps) is compared over the same window as the others;
-  * figure numbers (figNN_*.png) match the figure numbers in the in-depth report.
+  * figure numbers (figNN_*.png) are kept from the in-depth reports (30 Sep, 6 Oct); figures
+    that are not in the paper were removed (branch paper-trim), so the numbering has gaps.
 """
 import os
 import sys
@@ -423,42 +424,6 @@ def fig03_algos_cost_curves(runs):
     save(fig, "fig03_algos_cost_curves")
 
 
-def fig04_algos_reward_curves(runs):
-    """Episode reward over training for the 7 algorithms, with unconstrained PPO as reference.
-
-    Reward = return of the training episodes that finished in each update
-    (episodic/sum_reward). The dashed grey line in every panel is PPO's seed mean, so the
-    reward each constrained method gives up can be read directly.
-    """
-    fig, axes = plt.subplots(2, 4, figsize=(11, 5.8), sharex=True, sharey=True,
-                             gridspec_kw={"hspace": 0.45})   # room for the x-label under the top-right panel
-    ppo_grid, ppo_arr = A.seed_curves(A.select(runs, experiment="compare_algos", alg="ppo"), None,
-                                      max_step_m=CMP_MAX, series_fn=A.reward_series)
-    ppo_mean = np.nanmean(ppo_arr, axis=0)
-    for ax, alg in zip(axes.flat, ALGS):
-        rs = A.select(runs, experiment="compare_algos", alg=alg)
-        if alg != "ppo":
-            ax.plot(ppo_grid, ppo_mean, color=ALG_COLOR["ppo"], lw=1.2, ls="--", zorder=2)
-        seeds_and_mean(ax, rs, None, ALG_COLOR[alg], max_step=CMP_MAX, series_fn=A.reward_series)
-        ax.set_title(LABEL[alg], loc="left", color=INK)
-        ax.set_ylim(-4, 40)          # room below 0 for PPO-Saute's penalised reward early on
-        ax.set_xlim(0, 30.5)
-        ax.axhline(0, color=AXIS, lw=0.8, zorder=1)
-    ax = axes.flat[-1]
-    ax.axis("off")
-    ax.text(0.02, 0.55, "Episode reward (return) of the\ntraining episodes finishing in\neach update.\n\nThin lines: 5 seeds\n"
-            "Thick line: mean of seeds\nDashed grey: PPO (no constraint),\nfor reference\n\n"
-            "PPO-Saute's logged reward includes\nits -1 penalty for steps taken after\nits own budget ran out, so it starts\n"
-            "slightly below 0.", transform=ax.transAxes, fontsize=8.8, color=INK2, va="center")
-    for ax in axes[1]:
-        ax.set_xlabel("Training steps (millions)")
-    axes[0, 3].tick_params(labelbottom=True)          # the panel below it is the text box
-    axes[0, 3].set_xlabel("Training steps (millions)")
-    for ax in axes[:, 0]:
-        ax.set_ylabel("Episode reward")
-    save(fig, "fig04_algos_reward_curves")
-
-
 def fig05_algos_metrics(runs):
     """Dot plots of the key training-time safety metrics per algorithm."""
     panels = [
@@ -514,80 +479,6 @@ def fig06_algos_tradeoff(runs):
     save(fig, "fig06_algos_tradeoff")
 
 
-def fig07_algos_penalties(runs):
-    """Cost (top) and each algorithm's penalty signal (bottom), seed means + seeds."""
-    algs = ["ppo_lag", "ppo_pid", "crpo", "focops", "p3o"]
-    pen_title = {"ppo_lag": "λ (Lagrange multiplier)", "ppo_pid": "λ (PID output)", "crpo": "% of updates optimising cost",
-                 "focops": "ν (FOCOPS multiplier)", "p3o": "κ (penalty; log scale, cap 50)"}
-    fig, axes = plt.subplots(2, 5, figsize=(13, 5.0), sharex=True, gridspec_kw={"wspace": 0.3})
-    for j, alg in enumerate(algs):
-        rs = A.select(runs, experiment="compare_algos", alg=alg)
-        ax = axes[0, j]
-        seeds_and_mean(ax, rs, "training/safety/env_cost_mean", ALG_COLOR[alg], max_step=CMP_MAX, lw=1.8)
-        ax.set_ylim(0, 125)
-        budget_line(ax, label=(alg == "p3o"))       # the only panel where the label does not sit on a curve
-        ax.set_title(LABEL[alg], loc="left", color=INK)
-        ax = axes[1, j]
-        if alg == "crpo":
-            # regime 1 = reward step, 0 = cost step; show a trailing 8-update share of cost steps
-            fn = lambda r: 100 * (1 - A.rolling(r.get("training/regime"), 8, np.nanmean))
-            seeds_and_mean(ax, rs, None, ALG_COLOR[alg], max_step=CMP_MAX, series_fn=fn, lw=1.8)
-            ax.set_ylim(0, 100)
-        else:
-            seeds_and_mean(ax, rs, A.PENALTY_KEY[alg], ALG_COLOR[alg], max_step=CMP_MAX, lw=1.8)
-        if alg == "p3o":
-            # kappa grows geometrically (x1.1 per violating update from 0.01), so a log axis
-            # shows it as a straight line and makes 'kappa = 1 only after ~13M steps' visible
-            ax.set_yscale("log")
-            ax.set_ylim(0.006, 100)
-            plain_log_ticks(ax, [0.01, 0.1, 1, 10, 50])
-            ax.axhline(1, color=AXIS, lw=0.8, zorder=1)
-        ax.set_title(pen_title[alg], loc="left", color=INK2, fontsize=8.8, fontweight="normal")
-        ax.set_xlabel("Training steps (M)")
-    axes[0, 0].set_ylabel("Mean cost per episode")
-    axes[1, 0].set_ylabel("Penalty signal")
-    legend_above(fig, [line_key(INK2, "mean of the 5 seeds"), line_key(INK2, "single seeds", lw=0.8),
-                       line_key(INK, "budget (25)", lw=1.0, ls="--")], top=0.88)
-    save(fig, "fig07_algos_penalties")
-
-
-def fig08_algos_episode_tail(runs):
-    """Episode-level cost distribution over training: mean, p90, p99 (log scale)."""
-    fig, axes = plt.subplots(2, 4, figsize=(11, 5.8), sharex=True, sharey=True,
-                             gridspec_kw={"hspace": 0.45})   # room for the x-label under the top-right panel
-    for ax, alg in zip(axes.flat, ALGS):
-        rs = A.select(runs, experiment="compare_algos", alg=alg)
-        ends, names = [], []
-        for key, shade, name in [("training/safety_ep/cost_p99", 0.35, "p99"), ("training/safety_ep/cost_p90", 0.65, "p90"),
-                                 ("training/safety_ep/cost_mean", 1.0, "mean")]:
-            grid, arr = A.seed_curves(rs, key, max_step_m=CMP_MAX)
-            curve = np.nanmean(arr, 0)               # NaN before the first full episodes finish
-            ax.plot(grid, curve, color=ALG_COLOR[alg], lw=1.8, alpha=shade)
-            if np.isfinite(curve).any():
-                ends.append(curve[np.isfinite(curve)][-1])
-                names.append(name)
-        ax.set_yscale("log")
-        ax.set_ylim(4, 400)
-        end_labels(ax, 30.6, ends, names, log=True, fontsize=7.5, color=INK2)
-        ax.set_yticks([5, 10, 25, 50, 100, 200])
-        ax.set_yticklabels(["5", "10", "25", "50", "100", "200"])
-        ax.set_xlim(0, 34)
-        budget_line(ax, label=False)
-        ax.set_title(LABEL[alg], loc="left", color=INK)
-    ax = axes.flat[-1]
-    ax.axis("off")
-    ax.text(0.02, 0.6, "True cost of the episodes that\nfinished in each update\n(seed mean).\n\nDarkest: mean\nMid: p90\nLightest: p99 (worst 1%)\n\n"
-            "Dashed line: budget (25).\n\nStarts ~2M steps in: shortened\nfirst episodes are excluded.", transform=ax.transAxes,
-            fontsize=9, color=INK2, va="center")
-    for ax in axes[1]:
-        ax.set_xlabel("Training steps (millions)")
-    axes[0, 3].tick_params(labelbottom=True)          # the panel below it is the text box
-    axes[0, 3].set_xlabel("Training steps (millions)")
-    for ax in axes[:, 0]:
-        ax.set_ylabel("Episode cost (log scale)")
-    save(fig, "fig08_algos_episode_tail")
-
-
 def fig09_algos_share_over(runs):
     """Share of finished episodes over budget, per update."""
     fig, axes = plt.subplots(2, 4, figsize=(11, 5.8), sharex=True, sharey=True,
@@ -618,63 +509,9 @@ def fig09_algos_share_over(runs):
 # Report section 4: 100M-step runs (experiment 'long_runs')
 # ---------------------------------------------------------------------------------
 
-def fig10_long_cost_curves(runs):
-    """100M-step runs: mean cost with the +-10% band."""
-    fig, axes = plt.subplots(1, 2, figsize=(11, 3.8), sharey=True)
-    for ax, alg in zip(axes, ["ppo_lag", "ppo_pid"]):
-        rs = A.select(runs, experiment="long_runs", alg=alg)
-        seeds_and_mean(ax, rs, "training/safety/env_cost_mean", ALG_COLOR[alg], lw=1.6)
-        ax.set_ylim(0, 60)
-        ax.set_xlim(0, 106)
-        budget_line(ax, band=True, label=(alg == "ppo_lag"))
-        ax.set_title(LABEL[alg] + " (3 seeds, 100M steps)", loc="left", color=INK)
-        ax.set_xlabel("Training steps (millions)")
-    axes[0].set_ylabel("Mean cost per episode")
-    save(fig, "fig10_long_cost_curves")
-
-
-def fig11_long_damping(runs):
-    """Oscillation amplitude and share of episodes over budget over 100M steps."""
-    fig, axes = plt.subplots(1, 2, figsize=(11, 3.7))
-    win = 20                                   # 20 updates ~= 5.2M steps
-    for alg in ["ppo_lag", "ppo_pid"]:
-        rs = A.select(runs, experiment="long_runs", alg=alg)
-        seeds_and_mean(axes[0], rs, None, ALG_COLOR[alg], series_fn=lambda r: A.rolling(r.get("training/safety/env_cost_mean"), win), lw=1.8)
-        seeds_and_mean(axes[1], rs, None, ALG_COLOR[alg],
-                       series_fn=lambda r: 100 * A.rolling(r.get("training/safety_ep/frac_over_budget"), win, np.nanmean), lw=1.8)
-    axes[0].set_title("Size of the swings (~5M-step window)", loc="left", color=INK)
-    axes[0].set_ylabel("Std of the mean cost per episode")
-    axes[0].set_ylim(0, 12)
-    axes[1].set_title("% of episodes over budget (~5M-step window)", loc="left", color=INK)
-    axes[1].set_ylabel("% of episodes over budget")
-    axes[1].set_ylim(0, 100)
-    axes[1].axhline(50, color=AXIS, lw=0.8)
-    for ax in axes:
-        ax.set_xlim(0, 106)
-        ax.set_xlabel("Training steps (millions)")
-    legend_above(fig, [line_key(ALG_COLOR["ppo_lag"], "PPO-Lag (mean of 3 seeds)"),
-                       line_key(ALG_COLOR["ppo_pid"], "PPO-PID (mean of 3 seeds)"),
-                       line_key(INK2, "single seeds", lw=0.8), line_key(AXIS, "50% (right panel)", lw=1.0)], top=0.86)
-    save(fig, "fig11_long_damping")
-
-
 # ---------------------------------------------------------------------------------
 # Report section 5: lambda learning rate (experiment 'lambda_lr'; rate 10 = compare_algos)
 # ---------------------------------------------------------------------------------
-
-def fig12_lr_curves(runs):
-    """Mean cost per update for each lambda learning rate."""
-    fig, axes = plt.subplots(1, 5, figsize=(13, 3.3), sharey=True)
-    for ax, lr, col in zip(axes, LRS, ORDINAL5):
-        seeds_and_mean(ax, lr_runs(runs, lr), "training/safety/env_cost_mean", col, max_step=35, lw=1.8)
-        ax.set_ylim(0, 60)
-        ax.set_xlim(0, 35.5)
-        budget_line(ax, band=True, label=(lr == 1))
-        ax.set_title(f"λ-rate {lr}" + (" (default)" if lr == 10 else ""), loc="left", color=INK)
-        ax.set_xlabel("Training steps (M)")
-    axes[0].set_ylabel("Mean cost per episode")
-    save(fig, "fig12_lr_curves")
-
 
 def fig13_lr_dose_response(runs):
     """Metrics against the lambda learning rate (log scale)."""
@@ -699,58 +536,6 @@ def fig13_lr_dose_response(runs):
 # ---------------------------------------------------------------------------------
 # Report section 6: number of parallel robots (experiment 'parallel_envs'; 2048 = compare_algos seeds 0-2)
 # ---------------------------------------------------------------------------------
-
-def fig14_envs_curves(runs):
-    """Parallel robots: PPO-Lag cost (row 1) and reward (row 2), and PPO reward (row 3).
-
-    Every seed is shown (thin) with the seed mean (thick). Row 3 shows that unconstrained
-    PPO fails to learn at 8192 robots as well, so the failure is not caused by the
-    safety method.
-    """
-    fig, axes = plt.subplots(3, 5, figsize=(13, 7.6), sharex=True)
-    for j, (n, col) in enumerate(zip(NENVS, ORDINAL5)):
-        rs = env_runs(runs, "ppo_lag", n)
-        seeds_and_mean(axes[0, j], rs, "training/safety/env_cost_mean", col, max_step=35, seed_alpha=0.6, lw=1.4)
-        axes[0, j].set_ylim(0, 220)
-        budget_line(axes[0, j], label=(j == 0), corner=True)
-        axes[0, j].set_title(f"{n} robots\n({A.UPDATE_STEPS // n} steps each per update)", loc="left", color=INK, fontsize=9)
-        seeds_and_mean(axes[1, j], rs, None, col, max_step=35, series_fn=A.reward_series, seed_alpha=0.6, lw=1.4)
-        axes[1, j].set_ylim(0, 40)
-        seeds_and_mean(axes[2, j], env_runs(runs, "ppo", n), None, ALG_COLOR["ppo"], max_step=35,
-                       series_fn=A.reward_series, seed_alpha=0.6, lw=1.4)
-        axes[2, j].set_ylim(0, 40)
-        axes[2, j].set_xlabel("Training steps (M)")
-    axes[0, 0].set_ylabel("PPO-Lag:\nmean cost per episode")
-    axes[1, 0].set_ylabel("PPO-Lag:\nepisode reward")
-    axes[2, 0].set_ylabel("PPO (no constraint):\nepisode reward")
-    save(fig, "fig14_envs_curves")
-
-
-def fig15_envs_metrics(runs):
-    """Safety, reward and throughput against the number of parallel robots."""
-    panels = [("ep_share_over", "% of episodes over budget", (0, 105)),
-              ("reward_final", "Reward (last 10 updates)", (0, 42)),
-              ("avg_cost", "Average cost per episode", (0, 160)),
-              ("sps_median", "Throughput (1000 steps/s)", (0, 265))]
-    fig, axes = plt.subplots(1, 4, figsize=(14, 3.8), gridspec_kw={"wspace": 0.28})
-    for ax, (key, title, ylim) in zip(axes, panels):
-        for alg in ["ppo", "ppo_lag"]:
-            vals = [metric_values(env_runs(runs, alg, n), key, max_step_m=34.95) for n in NENVS]
-            if key == "sps_median":
-                vals = [[v / 1000 for v in vs] for vs in vals]
-            trend_dots(ax, NENVS, vals, ALG_COLOR[alg], label=LABEL[alg], logx=True)
-        ax.set_ylim(*ylim)
-        ax.set_title(title, loc="left", color=INK, fontsize=9.5)
-        ax.set_xlabel("Parallel robots (log scale)")
-        # throughput is unaffected by the learning failure, so that panel is not shaded
-        if key != "sps_median":
-            shade_failed_learning(ax, label=False)
-        ax.set_xlim(512 / 1.35, 8192 * 1.35)
-    shade_key = matplotlib.patches.Patch(facecolor=FAILED_SHADE, alpha=0.45, label="learning failed in some seeds")
-    legend_above(fig, [line_key(ALG_COLOR["ppo"], LABEL["ppo"], marker="o"), line_key(ALG_COLOR["ppo_lag"], LABEL["ppo_lag"], marker="o"),
-                       seed_key(), shade_key], top=0.84)
-    save(fig, "fig15_envs_metrics")
-
 
 # ---------------------------------------------------------------------------------
 # Report section 7: harder levels (experiment 'harder_levels'; Level 1 = compare_algos)
@@ -855,39 +640,6 @@ def fig19_ant_metrics(runs):
 # ---------------------------------------------------------------------------------
 # Report section 9: findings across experiments
 # ---------------------------------------------------------------------------------
-
-def fig20_final_vs_training(runs):
-    """Final evaluation cost vs time spent over budget during training (colour = algorithm, shape = setting)."""
-    fig, ax = plt.subplots(figsize=(7.6, 5.0))
-    ax.axvspan(-1.5, D, color="#1baf7a", alpha=0.06, lw=0)
-    safe = safe_runs_for_crosscut(runs)
-    for alg in ["ppo_lag", "ppo_pid", "crpo", "focops"]:
-        for setting, marker in SETTING_MARKER.items():
-            ms = [A.run_metrics(r) for r in safe if r.alg == alg and setting_of(r) == setting]
-            if ms:
-                ax.scatter([m["eval_cost_final"] for m in ms], [m["pct_over"] for m in ms], s=30, marker=marker,
-                           color=ALG_COLOR[alg], edgecolor="white", linewidth=0.5, zorder=3)
-    ax.axvline(D, color=INK, lw=1, ls="--")
-    ax.text(D + 0.8, 2, "budget", fontsize=8, color=INK)
-    ax.text(1, 69, "final policy within budget\n(left of the dashed line), yet\nmany training updates were over it",
-            fontsize=8.5, color=INK2, va="top")
-    # two-part legend: colour = algorithm, shape = setting
-    alg_handles = [plt.Line2D([], [], ls="", marker="o", color=ALG_COLOR[a], label=LABEL[a])
-                   for a in ["ppo_lag", "ppo_pid", "crpo", "focops"]]
-    set_handles = [plt.Line2D([], [], ls="", marker=m, color=INK2, label=k) for k, m in SETTING_MARKER.items()]
-    # both legends sit outside the plot area, to the right, so they never cover a run
-    leg = ax.legend(handles=alg_handles, loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8.5,
-                    title="Colour: algorithm", title_fontsize=8.5, alignment="left")
-    ax.add_artist(leg)
-    leg.set_clip_on(False)        # add_artist clips to the axes; unclipped, the saved image keeps the whole legend
-    ax.legend(handles=set_handles, loc="upper left", bbox_to_anchor=(1.02, 0.62), fontsize=8.5,
-              title="Shape: setting", title_fontsize=8.5, alignment="left")
-    ax.set_xlim(-1.5, 60)                     # a little room so a final cost of exactly 0 is visible
-    ax.set_ylim(0, 70)
-    ax.set_xlabel("Cost of the final policy in evaluation (last evaluation)")
-    ax.set_ylabel("% of training updates over budget")
-    save(fig, "fig20_final_vs_training")
-
 
 def near_budget_share(runs, levels):
     """% of episodes over budget in Goal Point runs whose mean episode cost is within 5% of d.
@@ -998,6 +750,15 @@ GOAL_METHODS = [
            alg="ppo_saute", variant="saute-gamma-budget-1.0"),
 ]
 GM = {m.key: m for m in GOAL_METHODS}
+
+# Experiment 14 (scripts/snellius/14_levers_button.sh): the two levers that worked on Goal Point
+# L1, replicated on Button (T = 2000, budget 25). Empty until those runs are downloaded.
+BUTTON_LEVERS = [
+    Method("lag_tight_button", "PPO-Lag, target 12.5", "Lag d'=12.5", "#0d366b", experiment="levers_button",
+           alg="ppo_lag", variant="episode_length-2000-safety_bound-12.5-metric_safety_bound-25"),
+    Method("p3o_fixed_button", "P3O, fixed κ = 20", "P3O κ=20", "#c2477a", experiment="levers_button",
+           alg="p3o", variant="episode_length-2000-initial_kappa-20-kappa_increase_factor-1.0-kappa_decrease_factor-1.0"),
+]
 CORE_KEYS = ["ppo", "ppo_lag", "pid10", "crpo", "focops", "cpo"]
 VARIANT_KEYS = ["ppo_lag", "lag_tight", "lag_tail_v", "lag_tail_cvar", "p3o_fast", "p3o_fixed", "saute"]
 
@@ -1492,8 +1253,14 @@ def fig32_tradeoff_final(runs):
     axes[0].legend(loc="upper left", bbox_to_anchor=(-0.02, -0.2), ncol=3, fontsize=7.8, title="Goal Point L1",
                    title_fontsize=8.3, alignment="left")
     for ax, (env, name) in zip(axes[1:], TASKS):
-        panel(ax, [(TASK_LABEL[a], ALG_COLOR[a], task_runs(runs, a, env)) for a in TASK_ALGS])
+        groups = [(TASK_LABEL[a], ALG_COLOR[a], task_runs(runs, a, env)) for a in TASK_ALGS]
+        if env == "safe_button_point":                     # experiment 14 levers, once downloaded
+            groups += [(m.label, m.color, m.runs(runs)) for m in BUTTON_LEVERS]
+        panel(ax, groups)
         ax.set_title(f"{name} (T = 2000)", loc="left", color=INK, fontsize=9.5)
+    if any(m.runs(runs) for m in BUTTON_LEVERS):
+        axes[3].legend(loc="upper left", bbox_to_anchor=(-0.02, -0.2), ncol=2, fontsize=7.8,
+                       title="Button, incl. levers (exp. 14)", title_fontsize=8.3, alignment="left")
     axes[2].legend(loc="upper left", bbox_to_anchor=(-0.6, -0.2), ncol=5, fontsize=7.8, title="Circle, Push, Button",
                    title_fontsize=8.3, alignment="left")
     save(fig, "fig32_tradeoff_final")
@@ -1526,17 +1293,85 @@ def fig33_reproducibility(runs):
     save(fig, "fig33_reproducibility")
 
 
-FIGURES = [fig01_measurement_mean_vs_tail, fig02_lockstep, fig03_algos_cost_curves,
-           fig04_algos_reward_curves, fig05_algos_metrics, fig06_algos_tradeoff,
-           fig07_algos_penalties, fig08_algos_episode_tail, fig09_algos_share_over,
-           fig10_long_cost_curves, fig11_long_damping, fig12_lr_curves,
-           fig13_lr_dose_response, fig14_envs_curves, fig15_envs_metrics,
-           fig16_levels_curves, fig17_levels_metrics, fig18_ant_curves,
-           fig19_ant_metrics, fig20_final_vs_training, fig21_mean_vs_share,
-           # batch 2 (6 Oct): final-policy evaluation, fixed baselines, CPO, other tasks
-           fig22_final_eval_goal, fig23_cdfs, fig24_training_vs_final, fig25_safety_tiers,
-           fig26_fixed_baselines, fig27_fixed_penalties, fig28_cpo_diagnostics, fig29_tasks_curves,
-           fig30_tasks_final, fig31_tails_goal, fig32_tradeoff_final, fig33_reproducibility]
+# =================================================================================
+# Direction brief (11 Oct 2026), step A1: is fig21's "one curve" a property of constrained
+# training in general, or of Goal Point only?
+# =================================================================================
+TASK_COLOR = {"safe_goal_point": "#2a78d6", "safe_circle_point": "#eb6834", "safe_push_point": "#1baf7a",
+              "safe_button_point": "#4a3aa7", "safe_velocity_ant": "#b3261e"}
+TASK_NAME = {"safe_goal_point": "Goal Point (L1-3)", "safe_circle_point": "Circle", "safe_push_point": "Push",
+             "safe_button_point": "Button", "safe_velocity_ant": "Ant velocity"}
+ALG_MARKER = {"ppo": "x", "ppo_lag": "o", "ppo_pid": "s", "crpo": "^", "focops": "D", "p3o": "v", "cpo": "P",
+              "ppo_saute": "*"}
+EXCLUDED_EXPERIMENTS = {"study01", "smoke_test", "smoke_new"}
+
+
+def fig34_mean_vs_share_all_tasks(runs):
+    """Mean episode cost / budget vs share of episodes over budget (final quarter), ALL tasks.
+
+    One dot per run; colour = task, marker = algorithm (the opposite of fig21, because the
+    question is now about tasks). Same exclusions as fig21: the first study, smoke tests and
+    the 4096/8192-robot settings where learning failed. Prints, per task, the share of
+    violating episodes in runs whose mean sits within 5% of the budget: the number the paper
+    quotes. Reading rule, fixed before looking: one band across tasks = V is set by the mean
+    alone; separate bands = V at a given mean depends on the task's cost distribution.
+    """
+    rows = []
+    for r in runs:
+        if r.experiment in EXCLUDED_EXPERIMENTS or (r.experiment == "parallel_envs" and r.num_envs >= 4096):
+            continue
+        m = A.run_metrics(r)
+        if np.isfinite(m["ep_final_mean"]) and np.isfinite(m["ep_final_share_over"]):
+            rows.append((r.env, r.alg, m["ep_final_mean"] / D, m["ep_final_share_over"]))
+
+    fig, ax = plt.subplots(figsize=(7.8, 5.0))
+    for env, alg, x, y in rows:
+        mk = ALG_MARKER.get(alg, "o")
+        edge = {} if mk == "x" else dict(edgecolor="white", linewidth=0.5)   # 'x' has no face to edge
+        ax.scatter(x, y, s=30, color=TASK_COLOR.get(env, INK2), marker=mk, zorder=3, **edge)
+    ax.axvline(1.0, color=INK, lw=1, ls="--")
+    ax.axhline(50, color=AXIS, lw=0.8)
+    ax.text(0.97, 101, "budget", fontsize=8, color=INK, ha="right", va="top")
+    ax.set_xscale("log")
+    ax.set_xlim(0.3, 8)
+    ax.xaxis.set_major_locator(matplotlib.ticker.FixedLocator([0.5, 1, 2, 4, 8]))
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FixedFormatter(["0.5", "1", "2", "4", "8"]))
+    ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+    ax.set_yticks(range(0, 101, 20))
+    ax.set_yticklabels([str(t) for t in range(0, 101, 20)])
+    ax.set_ylim(0, 105)
+    ax.set_xlabel("Mean episode cost / budget, final quarter (log scale)")
+    ax.set_ylabel("% of episodes over budget, final quarter")
+    task_h = [plt.Line2D([], [], ls="", marker="o", color=c, label=TASK_NAME[e]) for e, c in TASK_COLOR.items()]
+    alg_h = [plt.Line2D([], [], ls="", marker=mk, color=INK2, label=LABEL.get(a, a)) for a, mk in ALG_MARKER.items()]
+    leg = ax.legend(handles=task_h, loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8.5,
+                    title="Colour: task", title_fontsize=8.5, alignment="left")
+    ax.add_artist(leg)
+    leg.set_clip_on(False)
+    ax.legend(handles=alg_h, loc="upper left", bbox_to_anchor=(1.02, 0.6), fontsize=8.5,
+              title="Marker: algorithm", title_fontsize=8.5, alignment="left")
+
+    print("fig34: runs with mean within 5% of the budget -> % of episodes over budget")
+    for env in TASK_COLOR:
+        v = [y for e, _, x, y in rows if e == env and abs(x - 1.0) <= 0.05]
+        if v:
+            print(f"  {TASK_NAME[env]:18s} n={len(v):2d}  {min(v):4.0f}-{max(v):3.0f}%  (mean {np.mean(v):.0f}%)")
+    save(fig, "fig34_mean_vs_share_all_tasks")
+
+
+# fig01-fig21 (first report, 30 Sep) are drawn from first-batch runs only (analysis_lib.batch1)
+# so their numbers never change; everything else uses every downloaded run.
+FIRST_REPORT = [fig01_measurement_mean_vs_tail, fig02_lockstep, fig03_algos_cost_curves,
+                fig05_algos_metrics, fig06_algos_tradeoff, fig09_algos_share_over,
+                fig13_lr_dose_response, fig16_levels_curves, fig17_levels_metrics,
+                fig18_ant_curves, fig19_ant_metrics, fig21_mean_vs_share]
+FIGURES = FIRST_REPORT + [
+    # batch 2 (6 Oct): final-policy evaluation, fixed baselines, CPO, other tasks
+    fig22_final_eval_goal, fig23_cdfs, fig24_training_vs_final, fig25_safety_tiers,
+    fig26_fixed_baselines, fig27_fixed_penalties, fig28_cpo_diagnostics, fig29_tasks_curves,
+    fig30_tasks_final, fig31_tails_goal, fig32_tradeoff_final, fig33_reproducibility,
+    # direction brief (11 Oct): cross-task version of fig21
+    fig34_mean_vs_share_all_tasks]
 
 
 def remove_old_figures():
@@ -1568,7 +1403,7 @@ def main():
     if not only:
         remove_old_figures()
     made = 0
-    first_report = set(FIGURES[:21])            # fig01-fig21: first-batch report, first-batch runs only
+    first_report = set(FIRST_REPORT)
     for f in FIGURES:
         if f.__name__.startswith(only):
             f(A.batch1(runs) if f in first_report else runs)

@@ -8,7 +8,7 @@ Everything here runs on a laptop; it only reads the exported CSV files.
 | `download_wandb.py` | Exports every run in wandb groups starting with `safety` to `wandb_exports/<group>/<run>.csv` (one row per logged wandb row), plus `<run>.summary.json` (the final-policy evaluation) and, for runs from 6 Oct on, `<run>.final_eval_episodes.npz` (raw per-episode final-evaluation costs and rewards). Files that already exist are skipped. |
 | `summarise_runs.py` | Quick one-line-per-run summary (standard library only) written to `run_summary.csv`. |
 | `analysis_lib.py` | Shared loading, cleaning and metric definitions. The figures and the quoted numbers both use it, so they cannot disagree. |
-| `make_figures.py` | Draws all 33 figures to `figures/figNN_*.png` (`--pdf` also writes vector PDFs for the paper): fig01-fig21 are the first in-depth report (first-batch runs only), fig22-fig33 the second batch (see below). |
+| `make_figures.py` | Draws the paper's figures to `figures/figNN_*.png` (`--pdf` also writes vector PDFs). Numbering is kept from the two in-depth reports, so it has gaps: fig04, 07, 08, 10, 11, 12, 14, 15 and 20 were removed on branch `paper-trim` (11 Oct) because they are not in the paper; `git show main:safety_analysis/make_figures.py` has them. fig34 is new (see below). |
 | `key_numbers.py` | Prints every number quoted in the reports and writes them to `figures/key_numbers.json`. |
 
 `wandb_exports/`, `figures/` and `*.csv` are git-ignored: they are large or can be regenerated.
@@ -20,7 +20,7 @@ From the repo folder:
 ```bash
 python -m pip install numpy matplotlib          # only if they are missing
 python safety_analysis/download_wandb.py        # once, or again after new runs finish
-python safety_analysis/make_figures.py          # all 21 figures (under a minute)
+python safety_analysis/make_figures.py          # all paper figures (under a minute)
 python safety_analysis/make_figures.py --pdf    # the same, plus vector PDF copies
 python safety_analysis/make_figures.py fig07    # one figure
 python safety_analysis/key_numbers.py           # all quoted numbers
@@ -37,6 +37,33 @@ What to expect on another computer:
 * A full run of `make_figures.py` deletes `figNN_*` files that no current figure writes.
   Figure numbers shifted when figures were added, so an old file could otherwise be
   mistaken for the new figure with the same number.
+
+## Paper figures (branch paper-trim, 11 Oct)
+
+The paper (direction brief in `Research Topics/4_Phase3_Research_Project/Notes/CRAX_project_direction_brief.pdf`)
+asks two questions. Which figure answers what:
+
+| Question | Figures |
+|---|---|
+| Measurement: per-update slice vs true episode metrics, desynced robots, reproducibility | fig01, fig02, fig33 |
+| RQ1 structure: V is set by the mean, not the algorithm; harder tasks and another robot | **fig34** (all tasks), fig21 (Goal only), fig16, fig17, fig18, fig19, fig09, fig03, fig05 |
+| RQ2 intervention: target, controller, tail signal, fixed penalty; reward cost | fig32, fig26, fig27, fig22, fig31, fig06, fig13 |
+| Training vs final policy; Spoor et al. metrics, tiers, CDFs | fig24, fig23, fig25, fig29, fig30 |
+| Discussion: CPO bias | fig28 |
+
+`fig34_mean_vs_share_all_tasks` is the cross-task version of fig21 (step A1 of the brief): x = mean episode
+cost / budget, y = % of episodes over budget, final quarter, one dot per run, colour = task, marker =
+algorithm. It also prints, per task, the share of violating episodes for runs whose mean is within 5% of
+the budget. Reading rule, fixed before looking: one band across tasks means V is set by the mean alone;
+separate bands mean V at a given mean depends on the task's cost distribution.
+
+### Experiment 14: levers on Button (`scripts/snellius/14_levers_button.sh`)
+
+PPO-Lag with target 12.5 (measured against 25) and P3O with fixed kappa = 20 on Button, T = 2000, 3 seeds,
+50M steps (~140 SBU). `bash scripts/snellius/14_levers_button.sh list` previews, `sbatch` submits from the
+repo root, then `python safety_analysis/download_wandb.py`. The runs appear automatically in fig34 and in
+the Button panel of fig32 (`BUTTON_LEVERS` in `make_figures.py`); `analysis_lib.parse_group` knows the
+group name `safety_levers_button_...`.
 
 ## Second batch (6 Oct): figures 22-33
 

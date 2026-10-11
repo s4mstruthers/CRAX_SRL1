@@ -149,6 +149,21 @@ define_other_tasks() {
   for s in 0 1 2; do add_task other_tasks 20 ppo_lag safe_goal_point 1 2048 $s 5e7 "--episode_length 2000"; done
 }
 
+# 14 Levers on Button (direction brief, 11 Oct): the two interventions that reduced per-episode
+#    violations on Goal Point L1, replicated on Button in the setting of experiment 11
+#    (Level 1, T = 2000, budget 25). Tighter training target measured against the real budget,
+#    and P3O with a fixed penalty. Button is chosen because its constrained methods sit at
+#    mean ~ budget with V ~ 36-43% (fig30), the same regime as Goal Point L1.
+define_levers_button() {
+  local s
+  for s in 0 1 2; do
+    add_task levers_button 20 ppo_lag safe_button_point 1 2048 $s 5e7 \
+      "--episode_length 2000 --safety_bound 12.5 --metric_safety_bound 25"
+    add_task levers_button 20 p3o safe_button_point 1 2048 $s 5e7 \
+      "--episode_length 2000 --initial_kappa 20 --kappa_increase_factor 1.0 --kappa_decrease_factor 1.0"
+  done
+}
+
 # ---------------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------------
