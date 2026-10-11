@@ -1,9 +1,10 @@
 """Produce the figures of the training-time safety paper (2AMM20, Oct 2026).
 
 Usage (repo folder, crax env active; needs numpy + matplotlib):
-    python safety_analysis/make_figures.py            # all paper figures -> safety_analysis/figures/*.png
-    python safety_analysis/make_figures.py fig07      # only figures whose name starts with fig07
-    python safety_analysis/make_figures.py --pdf      # also write vector PDFs (for the paper)
+    python safety_analysis/make_figures.py            # all figures -> figures/paper/ (8) and figures/supplement/ (14)
+    python safety_analysis/make_figures.py --paper    # the 8 main-text figures only
+    python safety_analysis/make_figures.py fig32      # only figures whose name starts with fig32
+    python safety_analysis/make_figures.py --pdf      # also write vector PDFs (for LaTeX)
 
 Every figure is built from analysis_lib (loading, cleaning, metrics), the same code
 key_numbers.py uses for the numbers quoted in the reports.
@@ -13,7 +14,7 @@ Conventions used in every plot
   * dashed black line = budget d = 25 per episode;
   * thin lines = individual seeds, thick line = mean over seeds;
   * dots in dot plots = individual seeds, short horizontal bar = mean over seeds;
-  * algorithm-comparison plots (figures 3, 5, 6, 9) stop at 30.2M steps, so that PPO-Saute
+  * algorithm-comparison plots (figures 3 and 6) stop at 30.2M steps, so that PPO-Saute
     (which trained for 30M steps) is compared over the same window as the others;
   * figure numbers (figNN_*.png) are kept from the in-depth reports (30 Sep, 6 Oct); figures
     that are not in the paper were removed (branch paper-trim), so the numbering has gaps.
@@ -233,14 +234,19 @@ def shade_failed_learning(ax, label=True, y_text=0.97, x_text=np.sqrt(4096 * 819
 SAVE_PDF = False                  # set by the --pdf command-line flag
 
 
+OUT_SUB = ""                      # "paper" or "supplement": set by main() per figure
+
+
 def save(fig, name):
-    """Write the figure to safety_analysis/figures/<name>.png (and .pdf with --pdf), then close it."""
-    os.makedirs(OUT, exist_ok=True)
-    fig.savefig(os.path.join(OUT, name + ".png"))
+    """Write the figure to safety_analysis/figures/<paper|supplement>/<name>.png (and .pdf with
+    --pdf), then close it."""
+    folder = os.path.join(OUT, OUT_SUB)
+    os.makedirs(folder, exist_ok=True)
+    fig.savefig(os.path.join(folder, name + ".png"))
     if SAVE_PDF:
-        fig.savefig(os.path.join(OUT, name + ".pdf"))
+        fig.savefig(os.path.join(folder, name + ".pdf"))
     plt.close(fig)
-    print("  wrote", name)
+    print(f"  wrote {OUT_SUB}/{name}")
 
 
 # ---------------------------------------------------------------------------------
@@ -424,29 +430,6 @@ def fig03_algos_cost_curves(runs):
     save(fig, "fig03_algos_cost_curves")
 
 
-def fig05_algos_metrics(runs):
-    """Dot plots of the key training-time safety metrics per algorithm."""
-    panels = [
-        ("avg_cost", "Average training cost per episode", "{:.0f}", (0, 125), False),
-        ("pct_over", "% of updates over budget", "{:.0f}%", (0, 115), False),
-        ("ep_share_over", "% of training episodes over budget", "{:.0f}%", (0, 115), False),
-        ("ep_final_p99", "Worst 1% of episodes (p99), final quarter", "{:.0f}", (0, 185), False),
-        ("first_under_m", "First update under budget (M steps)", "{:.1f}", (0, 14.2), False),
-        ("reward_final", "Episode reward, last 10 updates", "{:.1f}", (0, 45), False),
-    ]
-    fig, axes = plt.subplots(2, 3, figsize=(12, 7.2), gridspec_kw={"hspace": 0.48, "wspace": 0.28})
-    short = ["PPO", "Lag", "PID", "CRPO", "FOCOPS", "P3O", "Saute"]
-    for ax, (key, title, fmt, ylim, logy) in zip(axes.flat, panels):
-        vals = [metric_values(A.select(runs, experiment="compare_algos", alg=a), key, max_step_m=CMP_MAX) for a in ALGS]
-        ax.set_ylim(*ylim)
-        dotplot(ax, ALGS, vals, [ALG_COLOR[a] for a in ALGS], fmt=fmt, ylim=ylim, logy=logy, labels=short,
-                never_y=13.2 if key == "first_under_m" else None)
-        ax.set_title(title, loc="left", color=INK, fontsize=9.5)
-        if key in ("avg_cost", "ep_final_p99"):
-            budget_line(ax)                          # dashed line, labelled "budget" at the right end
-    save(fig, "fig05_algos_metrics")
-
-
 def fig06_algos_tradeoff(runs):
     """Reward vs training cost: small dots = seeds, large ringed dot = mean of the 5 seeds.
 
@@ -477,32 +460,6 @@ def fig06_algos_tradeoff(runs):
                        plt.Line2D([], [], ls="", marker="o", ms=8.5, markerfacecolor=INK2, markeredgecolor=INK,
                                   label="mean of the 5 seeds")], loc="lower right", fontsize=8)
     save(fig, "fig06_algos_tradeoff")
-
-
-def fig09_algos_share_over(runs):
-    """Share of finished episodes over budget, per update."""
-    fig, axes = plt.subplots(2, 4, figsize=(11, 5.8), sharex=True, sharey=True,
-                             gridspec_kw={"hspace": 0.45})   # room for the x-label under the top-right panel
-    fn = lambda r: 100 * r.get("training/safety_ep/frac_over_budget")
-    for ax, alg in zip(axes.flat, ALGS):
-        rs = A.select(runs, experiment="compare_algos", alg=alg)
-        seeds_and_mean(ax, rs, None, ALG_COLOR[alg], max_step=CMP_MAX, series_fn=fn, lw=1.8)
-        ax.axhline(50, color=AXIS, lw=0.8)
-        ax.set_ylim(0, 105)
-        ax.set_xlim(0, 30.5)
-        ax.set_title(LABEL[alg], loc="left", color=INK)
-    ax = axes.flat[-1]
-    ax.axis("off")
-    ax.text(0.02, 0.6, "Share of the episodes finishing\nin each update whose total\ncost exceeded the budget (25).\n\n"
-            "Thin: seeds, thick: mean.\nGrey horizontal line: 50%.",
-            transform=ax.transAxes, fontsize=9, color=INK2, va="center")
-    for ax in axes[1]:
-        ax.set_xlabel("Training steps (millions)")
-    axes[0, 3].tick_params(labelbottom=True)          # the panel below it is the text box
-    axes[0, 3].set_xlabel("Training steps (millions)")
-    for ax in axes[:, 0]:
-        ax.set_ylabel("% of episodes over budget")
-    save(fig, "fig09_algos_share_over")
 
 
 # ---------------------------------------------------------------------------------
@@ -640,69 +597,6 @@ def fig19_ant_metrics(runs):
 # ---------------------------------------------------------------------------------
 # Report section 9: findings across experiments
 # ---------------------------------------------------------------------------------
-
-def near_budget_share(runs, levels):
-    """% of episodes over budget in Goal Point runs whose mean episode cost is within 5% of d.
-
-    Uses the final quarter of each run (same selection as key_numbers.cross_cutting).
-    Returns (mean, min, max, number of runs).
-    """
-    vals = []
-    for r in runs:
-        if r.env != "safe_goal_point" or r.experiment == "study01" or r.level not in levels:
-            continue
-        if r.experiment == "parallel_envs" and r.num_envs >= 4096:
-            continue
-        m = A.run_metrics(r)
-        if np.isfinite(m["ep_final_mean"]) and 0.95 * D <= m["ep_final_mean"] <= 1.05 * D:
-            vals.append(m["ep_final_share_over"])
-    return float(np.mean(vals)), float(min(vals)), float(max(vals)), len(vals)
-
-
-def fig21_mean_vs_share(runs):
-    """Mean episode cost vs share of episodes over budget (final quarter), all Goal Point runs.
-
-    Colour = algorithm, shape = level. Runs at 4096/8192 robots (learning failed) and the
-    first study are left out. The annotation numbers are computed here from the data.
-    """
-    fig, ax = plt.subplots(figsize=(7.8, 5.0))
-    for alg in ALGS:
-        rs = [r for r in runs if r.alg == alg and r.env == "safe_goal_point" and r.experiment != "study01"
-              and not (r.experiment == "parallel_envs" and r.num_envs >= 4096)]
-        for levels, marker in (((1,), "o"), ((2, 3), "^")):
-            ms = [A.run_metrics(r) for r in rs if r.level in levels]
-            if ms:
-                ax.scatter([m["ep_final_mean"] for m in ms], [m["ep_final_share_over"] for m in ms], s=26, marker=marker,
-                           color=ALG_COLOR[alg], edgecolor="white", linewidth=0.5, zorder=3)
-    ax.axvline(D, color=INK, lw=1, ls="--")
-    ax.axhline(50, color=AXIS, lw=0.8)
-    ax.set_xscale("log")
-    ax.set_xlim(8, 200)
-    plain_log_ticks(ax, [10, 25, 50, 100, 200], both=True)
-    ax.set_yticks(range(0, 101, 20))
-    ax.set_yticklabels([str(t) for t in range(0, 101, 20)])
-    ax.set_ylim(0, 105)
-    ax.text(D * 0.97, 101, "budget", fontsize=8, color=INK, ha="right", va="top")
-    l1, l23 = near_budget_share(runs, (1,)), near_budget_share(runs, (2, 3))
-    ax.annotate(f"mean cost within 5% of the budget:\nLevel 1: {l1[1]:.0f}-{l1[2]:.0f}% of episodes over it "
-                f"({l1[3]} runs)\nLevels 2-3: {l23[1]:.0f}-{l23[2]:.0f}% ({l23[3]} runs)",
-                (D, 45), xytext=(8.6, 76), fontsize=8.3, color=INK2, zorder=6,
-                bbox=dict(facecolor="white", edgecolor="none", alpha=0.9, pad=2),
-                arrowprops=dict(arrowstyle="-", color=INK2, lw=0.7))
-    ax.set_xlabel("Mean episode cost, final quarter (log scale)")
-    ax.set_ylabel("% of episodes over budget, final quarter")
-    alg_handles = [plt.Line2D([], [], ls="", marker="o", color=ALG_COLOR[a], label=LABEL[a]) for a in ALGS]
-    lvl_handles = [plt.Line2D([], [], ls="", marker="o", color=INK2, label="Level 1"),
-                   plt.Line2D([], [], ls="", marker="^", color=INK2, label="Levels 2-3")]
-    # both legends sit outside the plot area, to the right, so they never cover a run
-    leg = ax.legend(handles=alg_handles, loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8.5,
-                    title="Colour: algorithm", title_fontsize=8.5, alignment="left")
-    ax.add_artist(leg)
-    leg.set_clip_on(False)        # add_artist clips to the axes; unclipped, the saved image keeps the whole legend
-    ax.legend(handles=lvl_handles, loc="upper left", bbox_to_anchor=(1.02, 0.45), fontsize=8.5,
-              title="Shape: level", title_fontsize=8.5, alignment="left")
-    save(fig, "fig21_mean_vs_share")
-
 
 # =================================================================================
 # Batch 2 (6 Oct 2026): final-policy evaluation, fixed baselines, CPO and other tasks
@@ -1361,19 +1255,32 @@ def fig34_mean_vs_share_all_tasks(runs):
     save(fig, "fig34_mean_vs_share_all_tasks")
 
 
+# The paper's main figures, in the order the paper uses them (figures/paper/).
+PAPER = [
+    fig34_mean_vs_share_all_tasks,    # RQ1: V is set by the mean alone, all tasks        (Fig. 1)
+    fig17_levels_metrics,             # RQ1: harder levels, the mean holds, the tail grows (Fig. 2)
+    fig03_algos_cost_curves,          # training-time cost per update, seven algorithms    (Fig. 3)
+    fig22_final_eval_goal,            # RQ2: final policy per lever on Goal L1             (Fig. 4)
+    fig32_tradeoff_final,             # RQ2: reward vs V per task, incl. Button levers     (Fig. 5)
+    fig26_fixed_baselines,            # RQ2: cost and reward curves of the levers          (Fig. 6)
+    fig24_training_vs_final,          # training-time vs final-policy safety               (Fig. 7)
+    fig23_cdfs,                       # Spoor-style CDFs of D_norm                         (Fig. 8)
+]
+# Supporting figures for the two-page reproducibility supplement and for the appendix of
+# the in-depth report (figures/supplement/). Not in the paper's main text.
+SUPPLEMENT = [
+    fig01_measurement_mean_vs_tail, fig02_lockstep, fig33_reproducibility,   # measurement
+    fig16_levels_curves, fig18_ant_curves, fig19_ant_metrics,                 # RQ1 detail
+    fig06_algos_tradeoff, fig13_lr_dose_response, fig27_fixed_penalties,      # RQ2 detail
+    fig31_tails_goal, fig28_cpo_diagnostics,                                  # discussion
+    fig25_safety_tiers, fig29_tasks_curves, fig30_tasks_final,                # Spoor metrics, other tasks
+]
 # fig01-fig21 (first report, 30 Sep) are drawn from first-batch runs only (analysis_lib.batch1)
 # so their numbers never change; everything else uses every downloaded run.
 FIRST_REPORT = [fig01_measurement_mean_vs_tail, fig02_lockstep, fig03_algos_cost_curves,
-                fig05_algos_metrics, fig06_algos_tradeoff, fig09_algos_share_over,
-                fig13_lr_dose_response, fig16_levels_curves, fig17_levels_metrics,
-                fig18_ant_curves, fig19_ant_metrics, fig21_mean_vs_share]
-FIGURES = FIRST_REPORT + [
-    # batch 2 (6 Oct): final-policy evaluation, fixed baselines, CPO, other tasks
-    fig22_final_eval_goal, fig23_cdfs, fig24_training_vs_final, fig25_safety_tiers,
-    fig26_fixed_baselines, fig27_fixed_penalties, fig28_cpo_diagnostics, fig29_tasks_curves,
-    fig30_tasks_final, fig31_tails_goal, fig32_tradeoff_final, fig33_reproducibility,
-    # direction brief (11 Oct): cross-task version of fig21
-    fig34_mean_vs_share_all_tasks]
+                fig06_algos_tradeoff, fig13_lr_dose_response, fig16_levels_curves,
+                fig17_levels_metrics, fig18_ant_curves, fig19_ant_metrics]
+FIGURES = PAPER + SUPPLEMENT
 
 
 def remove_old_figures():
@@ -1384,30 +1291,41 @@ def remove_old_figures():
     """
     if not os.path.isdir(OUT):
         return
-    current = {f.__name__ for f in FIGURES}
-    for fname in sorted(os.listdir(OUT)):
-        stem, ext = os.path.splitext(fname)
-        if ext in (".png", ".pdf") and stem[:3] == "fig" and stem[3:5].isdigit() and stem not in current:
+    expected = {f.__name__: "paper" for f in PAPER}
+    expected.update({f.__name__: "supplement" for f in SUPPLEMENT})
+    for sub in ("", "paper", "supplement"):          # "" = the flat layout used before 11 Oct
+        folder = os.path.join(OUT, sub)
+        if not os.path.isdir(folder):
+            continue
+        for fname in sorted(os.listdir(folder)):
+            stem, ext = os.path.splitext(fname)
+            if ext not in (".png", ".pdf") or stem[:3] != "fig" or not stem[3:5].isdigit():
+                continue
+            if expected.get(stem) == sub:
+                continue                               # current figure in its current folder
             try:
-                os.remove(os.path.join(OUT, fname))
-                print("  removed old figure", fname)
+                os.remove(os.path.join(folder, fname))
+                print("  removed old figure", os.path.join(sub, fname))
             except OSError as err:
                 print(f"  could not remove old figure {fname}: {err}")
 
 
 def main():
-    global SAVE_PDF
-    args = [a for a in sys.argv[1:] if a != "--pdf"]
-    SAVE_PDF = "--pdf" in sys.argv[1:]
+    global SAVE_PDF, OUT_SUB
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    SAVE_PDF = "--pdf" in flags
     only = args[0] if args else ""
+    todo = PAPER if "--paper" in flags else FIGURES
     runs = A.load_runs()
     print(f"Loaded {len(runs)} runs from {A.EXPORTS}")
-    if not only:
+    if not only and "--paper" not in flags:
         remove_old_figures()
     made = 0
     first_report = set(FIRST_REPORT)
-    for f in FIGURES:
+    for f in todo:
         if f.__name__.startswith(only):
+            OUT_SUB = "paper" if f in PAPER else "supplement"
             f(A.batch1(runs) if f in first_report else runs)
             made += 1
     if made == 0:
