@@ -1227,17 +1227,18 @@ def fig34_mean_vs_share_all_tasks(runs):
         ax.scatter(x, y, s=30, color=TASK_COLOR.get(env, INK2), marker=mk, zorder=3, **edge)
     ax.axvline(1.0, color=INK, lw=1, ls="--")
     ax.axhline(50, color=AXIS, lw=0.8)
-    ax.text(0.97, 101, "budget", fontsize=8, color=INK, ha="right", va="top")
+    ax.text(0.97, 101, "mean = budget", fontsize=8, color=INK, ha="right", va="top")
+    ax.text(0.31, 51.5, "half the episodes", fontsize=7.5, color=INK2, ha="left", va="bottom")
     ax.set_xscale("log")
     ax.set_xlim(0.3, 8)
     ax.xaxis.set_major_locator(matplotlib.ticker.FixedLocator([0.5, 1, 2, 4, 8]))
-    ax.xaxis.set_major_formatter(matplotlib.ticker.FixedFormatter(["0.5", "1", "2", "4", "8"]))
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FixedFormatter(["0.5×", "1×", "2×", "4×", "8×"]))
     ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
     ax.set_yticks(range(0, 101, 20))
     ax.set_yticklabels([str(t) for t in range(0, 101, 20)])
     ax.set_ylim(0, 105)
-    ax.set_xlabel("Mean episode cost / budget, final quarter (log scale)")
-    ax.set_ylabel("% of episodes over budget, final quarter")
+    ax.set_xlabel(f"Mean episode cost of the run, as a multiple of the budget ({D:g}); final quarter, log scale")
+    ax.set_ylabel(f"% of the run's episodes with cost over the budget ({D:g})")
     task_h = [plt.Line2D([], [], ls="", marker="o", color=c, label=TASK_NAME[e]) for e, c in TASK_COLOR.items()]
     alg_h = [plt.Line2D([], [], ls="", marker=mk, color=INK2, label=LABEL.get(a, a)) for a, mk in ALG_MARKER.items()]
     leg = ax.legend(handles=task_h, loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8.5,
