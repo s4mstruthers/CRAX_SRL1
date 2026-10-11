@@ -1258,9 +1258,11 @@ def fig32_tradeoff_final(runs):
             groups += [(m.label, m.color, m.runs(runs)) for m in BUTTON_LEVERS]
         panel(ax, groups)
         ax.set_title(f"{name} (T = 2000)", loc="left", color=INK, fontsize=9.5)
-    if any(m.runs(runs) for m in BUTTON_LEVERS):
-        axes[3].legend(loc="upper left", bbox_to_anchor=(-0.02, -0.2), ncol=2, fontsize=7.8,
-                       title="Button, incl. levers (exp. 14)", title_fontsize=8.3, alignment="left")
+    lever_handles = [plt.Line2D([], [], ls="", marker="o", color=m.color, markeredgecolor=INK, label=m.label)
+                     for m in BUTTON_LEVERS if m.runs(runs)]
+    if lever_handles:                                   # experiment 14, only once its runs are downloaded
+        axes[3].legend(handles=lever_handles, loc="lower right", fontsize=7.8,       # inside the panel: the
+                       title="Levers (exp. 14)", title_fontsize=8.3, alignment="left")   # lower right is empty
     axes[2].legend(loc="upper left", bbox_to_anchor=(-0.6, -0.2), ncol=5, fontsize=7.8, title="Circle, Push, Button",
                    title_fontsize=8.3, alignment="left")
     save(fig, "fig32_tradeoff_final")
