@@ -757,7 +757,7 @@ BUTTON_LEVERS = [
     Method("lag_tight_button", "PPO-Lag, target 12.5", "Lag d'=12.5", "#0d366b", experiment="levers_button",
            alg="ppo_lag", variant="episode_length-2000-safety_bound-12.5-metric_safety_bound-25"),
     Method("p3o_fixed_button", "P3O, fixed κ = 20", "P3O κ=20", "#c2477a", experiment="levers_button",
-           alg="p3o", variant="episode_length-2000-initial_kappa-20-kappa_increase_factor-1.0-kappa_decrease_factor-1.0"),
+           alg="p3o", variant="T2000-fixed_kappa-20"),   # short group tag (wandb 128-char limit)
 ]
 CORE_KEYS = ["ppo", "ppo_lag", "pid10", "crpo", "focops", "cpo"]
 VARIANT_KEYS = ["ppo_lag", "lag_tight", "lag_tail_v", "lag_tail_cvar", "p3o_fast", "p3o_fixed", "saute"]

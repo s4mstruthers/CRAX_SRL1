@@ -14,8 +14,24 @@
 
 TASKS=()
 
-# add_task EXPERIMENT NUM_EVALS ALG ENV LEVEL NUM_ENVS SEED STEPS [EXTRA_ARGS]
-add_task() { TASKS+=("$1|$2|$3|$4|$5|$6|$7|$8|${9:-}"); }
+# add_task EXPERIMENT NUM_EVALS ALG ENV LEVEL NUM_ENVS SEED STEPS [EXTRA_ARGS] [GROUP_TAG]
+# GROUP_TAG replaces the spelled-out EXTRA_ARGS in the wandb group name. wandb caps group
+# names at 128 characters; the spelled-out form of long flag sets exceeds that (experiment
+# 14's P3O runs failed on it, 11 Oct), so give those a short tag.
+add_task() { TASKS+=("$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}"); }
+
+# wandb group name for one task; mirrors the naming analysis_lib.parse_group expects.
+group_name() {
+  local experiment=$1 alg=$2 env=$3 level=$4 num_envs=$5 extra=$6 gtag=$7 tag=""
+  if [ -n "$gtag" ]; then
+    tag="_${gtag}"
+  elif [[ "$extra" =~ ^--lagrangian_coef_rate\ [^\ ]+$ ]]; then
+    tag="_lr${extra##* }"                 # short form (_lr3) so existing groups still match
+  elif [ -n "$extra" ]; then              # anything else is spelled out, e.g. _initial_kappa-1-kappa_decrease_factor-1.0
+    tag="_$(echo "$extra" | sed -E 's/--//g; s/[^A-Za-z0-9._]+/-/g; s/^-+|-+$//g')"
+  fi
+  echo "safety_${experiment}_${alg}_${env#safe_}_L${level}_n${num_envs}${tag}"
+}
 
 # ---------------------------------------------------------------------------------
 # Experiment definitions
@@ -160,7 +176,8 @@ define_levers_button() {
     add_task levers_button 20 ppo_lag safe_button_point 1 2048 $s 5e7 \
       "--episode_length 2000 --safety_bound 12.5 --metric_safety_bound 25"
     add_task levers_button 20 p3o safe_button_point 1 2048 $s 5e7 \
-      "--episode_length 2000 --initial_kappa 20 --kappa_increase_factor 1.0 --kappa_decrease_factor 1.0"
+      "--episode_length 2000 --initial_kappa 20 --kappa_increase_factor 1.0 --kappa_decrease_factor 1.0" \
+      "T2000-fixed_kappa-20"                  # short tag: the spelled-out form is 131 chars, over wandb's 128
   done
 }
 
@@ -173,12 +190,18 @@ run_tasks() {
   # ---- list mode: show what would run, and check the header's array range ----
   if [ "$mode" = "list" ]; then
     echo "${n} runs:"
-    local i exp ev a e l ne s st x
+    local i exp ev a e l ne s st x gt g bad=0
     for i in "${!TASKS[@]}"; do
-      IFS='|' read -r exp ev a e l ne s st x <<< "${TASKS[$i]}"
+      IFS='|' read -r exp ev a e l ne s st x gt <<< "${TASKS[$i]}"
       printf "  %3d  %-14s %-9s %-18s L%s  envs=%-5s seed=%s  steps=%-4s evals=%-2s %s\n" \
         "$i" "$exp" "$a" "$e" "$l" "$ne" "$s" "$st" "$ev" "$x"
+      g=$(group_name "$exp" "$a" "$e" "$l" "$ne" "$x" "$gt")
+      if [ "${#g}" -gt 128 ]; then
+        echo "       ERROR: wandb group name has ${#g} characters (limit 128); give this task a GROUP_TAG: ${g}"
+        bad=1
+      fi
     done
+    [ "$bad" = 1 ] && echo "Fix the group names above before submitting."
     local header_array
     header_array=$(grep -m1 '^#SBATCH --array=' "$0" | sed 's/^#SBATCH --array=//')
     if [ "${header_array%%%*}" = "0-$((n - 1))" ]; then
@@ -196,8 +219,8 @@ run_tasks() {
     echo "Array index ${idx} is outside this job (0-$((n - 1))). Nothing run."
     return 0
   fi
-  local experiment num_evals alg env level num_envs seed steps extra
-  IFS='|' read -r experiment num_evals alg env level num_envs seed steps extra <<< "${TASKS[$idx]}"
+  local experiment num_evals alg env level num_envs seed steps extra gtag
+  IFS='|' read -r experiment num_evals alg env level num_envs seed steps extra gtag <<< "${TASKS[$idx]}"
 
   # ---- Software stack, with a GPU check before any training starts ----
   # Group members' venvs differ: a venv installed with `pip install -e ".[train,cuda]"`
@@ -249,15 +272,13 @@ PY
 
   export CRAX_DESYNC_EPISODES=1
   # Group-name tag for the extra arguments. "--lagrangian_coef_rate 3" keeps its old
-  # short form (_lr3) so existing groups still match; anything else is spelled out,
-  # e.g. "--initial_kappa 1 --kappa_decrease_factor 1.0" -> _initial_kappa-1-kappa_decrease_factor-1.0
-  local tag=""
-  if [[ "$extra" =~ ^--lagrangian_coef_rate\ [^\ ]+$ ]]; then
-    tag="_lr${extra##* }"
-  elif [ -n "$extra" ]; then
-    tag="_$(echo "$extra" | sed -E 's/--//g; s/[^A-Za-z0-9._]+/-/g; s/^-+|-+$//g')"
+  local group
+  group=$(group_name "$experiment" "$alg" "$env" "$level" "$num_envs" "$extra" "$gtag")
+  if [ "${#group}" -gt 128 ]; then
+    echo "ERROR: wandb group name has ${#group} characters (limit 128): ${group}"
+    echo "Give this task a GROUP_TAG in its add_task line. Stopping before any GPU time is used."
+    exit 1
   fi
-  local group="safety_${experiment}_${alg}_${env#safe_}_L${level}_n${num_envs}${tag}"
   echo "Run ${idx}/${n} (${experiment}): alg=${alg} env=${env} level=${level} envs=${num_envs} seed=${seed} steps=${steps} ${extra} -> wandb group ${group}"
   python -c "import jax; print(jax.devices())"
 
