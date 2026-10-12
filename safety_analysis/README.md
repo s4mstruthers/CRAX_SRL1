@@ -8,7 +8,7 @@ Everything here runs on a laptop; it only reads the exported CSV files.
 | `download_wandb.py` | Exports every run in wandb groups starting with `safety` to `wandb_exports/<group>/<run>.csv` (one row per logged wandb row), plus `<run>.summary.json` (the final-policy evaluation) and, for runs from 6 Oct on, `<run>.final_eval_episodes.npz` (raw per-episode final-evaluation costs and rewards). Files that already exist are skipped. |
 | `summarise_runs.py` | Quick one-line-per-run summary (standard library only) written to `run_summary.csv`. |
 | `analysis_lib.py` | Shared loading, cleaning and metric definitions. The figures and the quoted numbers both use it, so they cannot disagree. |
-| `make_figures.py` | Draws all 33 figures to `figures/figNN_*.png` (`--pdf` also writes vector PDFs for the paper): fig01-fig21 are the first in-depth report (first-batch runs only), fig22-fig33 the second batch (see below). |
+| `make_figures.py` | Draws the paper's 8 main figures to `figures/paper/` and 12 supporting figures to `figures/supplement/` (`--paper` for the main set only, `--pdf` also writes vector PDFs). The `PAPER` and `SUPPLEMENT` lists at the bottom of the file are the single source of what exists; `git show main:safety_analysis/make_figures.py` has the figures removed on 11 Oct (and fig06, fig16, fig25, removed on 12 Oct). |
 | `key_numbers.py` | Prints every number quoted in the reports and writes them to `figures/key_numbers.json`. |
 
 `wandb_exports/`, `figures/` and `*.csv` are git-ignored: they are large or can be regenerated.
@@ -20,7 +20,8 @@ From the repo folder:
 ```bash
 python -m pip install numpy matplotlib          # only if they are missing
 python safety_analysis/download_wandb.py        # once, or again after new runs finish
-python safety_analysis/make_figures.py          # all 21 figures (under a minute)
+python safety_analysis/make_figures.py          # all 20 figures (under a minute)
+python safety_analysis/make_figures.py --paper  # the 8 main-text figures only
 python safety_analysis/make_figures.py --pdf    # the same, plus vector PDF copies
 python safety_analysis/make_figures.py fig07    # one figure
 python safety_analysis/key_numbers.py           # all quoted numbers
@@ -38,7 +39,36 @@ What to expect on another computer:
   Figure numbers shifted when figures were added, so an old file could otherwise be
   mistaken for the new figure with the same number.
 
-## Second batch (6 Oct): figures 22-33
+## Paper figures (branch paper-trim, 11 Oct)
+
+The paper (direction brief in `Research Topics/4_Phase3_Research_Project/Notes/CRAX_project_direction_brief.pdf`)
+asks two questions: (RQ1) how the per-episode violation rate V depends on the mean cost, task and robot;
+(RQ2) which lever reduces V at what reward cost. `figures/paper/`, in the order the paper uses them:
+
+| Paper figure | File | Shows |
+|---|---|---|
+| 1 | fig34_mean_vs_share_all_tasks | RQ1 headline: mean cost / budget vs % episodes over budget, every run of every task. One band: V is set by the mean alone. Prints the per-task numbers quoted in the paper. |
+| 2 | fig17_levels_metrics | RQ1: Goal Levels 1-3, the mean holds while the tail (p99, % over 2d) grows |
+| 3 | fig03_algos_cost_curves | Training-time cost per update, seven algorithms, Goal L1 |
+| 4 | fig22_final_eval_goal | RQ2: final policy per lever on Goal L1 (V, cost, D_norm+, reward; stochastic vs greedy) |
+| 5 | fig32_tradeoff_final | RQ2: final greedy reward vs V per task, with the experiment-14 levers on Button |
+| 6 | fig26_fixed_baselines | RQ2: cost and reward curves of each lever vs its CRAX default |
+| 7 | fig24_training_vs_final | Training-time vs final-policy safety, per run |
+| 8 | fig23_cdfs | CDFs of D_norm (Spoor et al. Fig. 2 style): training, final stochastic, final greedy |
+
+`figures/supplement/` holds the 12 supporting figures (measurement checks, Ant curves,
+lambda-rate dose-response, penalties, tails, CPO diagnostics, other-task curves, and fig35: the
+final-policy cost distribution on Button as an exceedance curve, added 12 Oct); the
+`SUPPLEMENT` list in `make_figures.py` says which.
+
+### Experiment 14: levers on Button (`scripts/snellius/14_levers_button.sh`)
+
+PPO-Lag with target 12.5 (measured against 25) and P3O with fixed kappa = 20 on Button, T = 2000, 3 seeds,
+50M steps (~30 SBU per run). Ran 11 Oct. `bash scripts/snellius/14_levers_button.sh list` previews (and checks
+wandb's 128-character group-name limit), `sbatch` submits from the repo root, `python safety_analysis/download_wandb.py`
+fetches. The runs appear in paper figures 1 and 5 (`BUTTON_LEVERS` in `make_figures.py`).
+
+## Second batch (6 Oct): figures 22-33 (historical note)
 
 Experiments `core_rerun` (10), `fixed_baselines` (09), `cpo` (13) and `other_tasks` (11). The
 first report's figures and `key_numbers.py` never use these runs (`analysis_lib.batch1`), so
@@ -49,7 +79,6 @@ they stay exactly as before.
 | fig22_final_eval_goal | Final policy on Goal Point L1, all 13 methods: V, mean cost, D_norm+, reward; stochastic (open) vs greedy (filled) |
 | fig23_cdfs | CDF of D_norm (Spoor et al. Fig. 2 style): during training vs final stochastic vs final greedy; methods and variants |
 | fig24_training_vs_final | Per run: % of training episodes over budget vs % of final greedy episodes over budget (all tasks) |
-| fig25_safety_tiers | Spoor et al. safety tiers (0-4) with D_norm, V, D_norm+, during training and for the final greedy policy |
 | fig26_fixed_baselines | Fixed baselines vs their CRAX defaults (PID, P3O, Saute, tighter target, tail-driven λ): cost and reward |
 | fig27_fixed_penalties | λ / κ of the fixed baselines |
 | fig28_cpo_diagnostics | CPO vs PPO-Lag/FOCOPS (cost, reward), share of updates per optimisation case, line search, KL, constraint value c |
