@@ -1,7 +1,7 @@
 """Produce the figures of the training-time safety paper (2AMM20, Oct 2026).
 
 Usage (repo folder, crax env active; needs numpy + matplotlib):
-    python safety_analysis/make_figures.py            # all figures -> figures/paper/ (8) and figures/supplement/ (14)
+    python safety_analysis/make_figures.py            # all figures -> figures/paper/ (8) and figures/supplement/ (12)
     python safety_analysis/make_figures.py --paper    # the 8 main-text figures only
     python safety_analysis/make_figures.py fig32      # only figures whose name starts with fig32
     python safety_analysis/make_figures.py --pdf      # also write vector PDFs (for LaTeX)
@@ -430,38 +430,6 @@ def fig03_algos_cost_curves(runs):
     save(fig, "fig03_algos_cost_curves")
 
 
-def fig06_algos_tradeoff(runs):
-    """Reward vs training cost: small dots = seeds, large ringed dot = mean of the 5 seeds.
-
-    Labels sit at fixed positions (data coordinates) with a thin leader line to the mean,
-    because PPO-Lag, PPO-PID, CRPO and FOCOPS overlap near the budget.
-    """
-    label_at = {"ppo": (84, 38.9), "ppo_lag": (4, 36.2), "ppo_pid": (4, 38.4), "crpo": (36, 27.0),
-                "focops": (38, 37.6), "p3o": (62, 37.6), "ppo_saute": (80, 29.0)}
-    fig, ax = plt.subplots(figsize=(7.4, 4.8))
-    ax.axvspan(0, D, color="#1baf7a", alpha=0.06, lw=0)
-    for alg in ALGS:
-        rs = A.select(runs, experiment="compare_algos", alg=alg)
-        ms = [A.run_metrics(r, max_step_m=CMP_MAX) for r in rs]
-        x = np.array([m["avg_cost"] for m in ms])
-        y = np.array([m["reward_final"] for m in ms])
-        ax.scatter(x, y, s=18, color=ALG_COLOR[alg], alpha=0.55, edgecolor="none", zorder=3)
-        ax.scatter([x.mean()], [y.mean()], s=70, color=ALG_COLOR[alg], edgecolor=INK, linewidth=0.9, zorder=4)
-        ax.annotate(LABEL[alg], (x.mean(), y.mean()), xytext=label_at[alg], textcoords="data", fontsize=8.5,
-                    color=INK, va="center", arrowprops=dict(arrowstyle="-", color=INK2, lw=0.6, shrinkA=2, shrinkB=5))
-    ax.axvline(D, color=INK, lw=1, ls="--")
-    ax.text(D + 1, 39.3, "budget (25)", fontsize=8, color=INK, ha="left")
-    ax.text(1.5, 23.0, "average within budget", fontsize=8, color="#0f7a53", ha="left")
-    ax.set_xlabel("Average training cost per episode (updates up to 30M steps)")
-    ax.set_ylabel("Episode reward at the end (last 10 updates)")
-    ax.set_xlim(0, 110)
-    ax.set_ylim(22, 40)
-    ax.legend(handles=[plt.Line2D([], [], ls="", marker="o", ms=4.5, color=INK2, alpha=0.55, label="one seed"),
-                       plt.Line2D([], [], ls="", marker="o", ms=8.5, markerfacecolor=INK2, markeredgecolor=INK,
-                                  label="mean of the 5 seeds")], loc="lower right", fontsize=8)
-    save(fig, "fig06_algos_tradeoff")
-
-
 # ---------------------------------------------------------------------------------
 # Report section 4: 100M-step runs (experiment 'long_runs')
 # ---------------------------------------------------------------------------------
@@ -497,24 +465,6 @@ def fig13_lr_dose_response(runs):
 # ---------------------------------------------------------------------------------
 # Report section 7: harder levels (experiment 'harder_levels'; Level 1 = compare_algos)
 # ---------------------------------------------------------------------------------
-
-def fig16_levels_curves(runs):
-    """Mean cost per update by level (rows = algorithm, columns = level)."""
-    fig, axes = plt.subplots(3, 3, figsize=(11, 7.4), sharex=True, sharey=True)
-    for i, alg in enumerate(LEVEL_ALGS):
-        for j, level in enumerate([1, 2, 3]):
-            ax = axes[i, j]
-            seeds_and_mean(ax, level_runs(runs, alg, level), "training/safety/env_cost_mean", ALG_COLOR[alg], max_step=35, lw=1.6)
-            ax.set_ylim(0, 60)
-            ax.set_xlim(0, 35.5)
-            budget_line(ax, band=True, label=(i == 0 and j == 0))
-            ax.set_title(f"{LABEL[alg]} · Level {level}", loc="left", color=INK)
-    for ax in axes[-1]:
-        ax.set_xlabel("Training steps (millions)")
-    for ax in axes[:, 0]:
-        ax.set_ylabel("Mean cost per episode")
-    save(fig, "fig16_levels_curves")
-
 
 def fig17_levels_metrics(runs):
     """Metrics against difficulty level for PPO and the three constrained algorithms."""
@@ -845,53 +795,6 @@ def fig24_training_vs_final(runs):
     ax.set_xlabel("% of training episodes over budget (whole run)")
     ax.set_ylabel("% of final greedy episodes over budget (V)")
     save(fig, "fig24_training_vs_final")
-
-
-TIER_COLORS = ["#f6f6f3", "#dbe9f8", "#b3d0f1", "#7eafe6", "#3f87d9"]   # tier 0 -> 4, one hue light -> dark
-
-
-def fig25_safety_tiers(runs):
-    """Safety tiers of Spoor et al. (2026, Table 1), during training and for the final greedy policy.
-
-    Tier 1: average cost within budget (D_norm <= 0); 2: also V <= 0.5; 3: also V <= 0.1 and
-    D_norm+ <= 0.1; 4: no violations. Metrics are seed means (one task, so the mean replaces
-    the paper's IQM across tasks). Training = average over updates (Spoor Eq. 6).
-    """
-    ms = GOAL_METHODS
-    rows = []
-    for m in ms:
-        vals = [A.spoor_metrics(r, max_step_m=CMP_MAX) for r in m.runs(runs)]
-        mean = {k: float(np.nanmean([v[k] for v in vals])) for k in vals[0]}
-        rows.append((m, mean, A.safety_tier(mean["train_d_norm"], mean["train_v"], mean["train_d_norm_plus"]),
-                     A.safety_tier(mean["final_d_norm"], mean["final_v"], mean["final_d_norm_plus"])))
-    cols = ["D_norm", "V", "D_norm+", "Tier", "D_norm", "V", "D_norm+", "Tier"]
-    fig, ax = plt.subplots(figsize=(10.5, 0.42 * len(rows) + 1.6))
-    ax.set_xlim(0, 10.5)
-    ax.set_ylim(len(rows) + 1.3, -0.2)
-    ax.axis("off")
-    x_cols = [3.2 + 0.9 * i + (0.4 if i >= 4 else 0) for i in range(8)]
-    ax.text(np.mean(x_cols[:4]), -0.05, "During training", ha="center", fontsize=9.5, fontweight="bold", color=INK)
-    ax.text(np.mean(x_cols[4:]), -0.05, "Final policy, greedy", ha="center", fontsize=9.5, fontweight="bold", color=INK)
-    for x, c in zip(x_cols, cols):
-        ax.text(x, 0.55, c, ha="center", fontsize=8.5, color=INK2)
-    for i, (m, mean, t_train, t_final) in enumerate(rows):
-        y = i + 1.25
-        ax.text(0.1, y, m.label, va="center", fontsize=8.5, color=INK)
-        ax.scatter([2.75], [y], s=40, color=m.color, zorder=3)
-        cells = [mean["train_d_norm"], mean["train_v"], mean["train_d_norm_plus"], t_train,
-                 mean["final_d_norm"], mean["final_v"], mean["final_d_norm_plus"], t_final]
-        for j, (x, v) in enumerate(zip(x_cols, cells)):
-            if j in (3, 7):
-                ax.add_patch(matplotlib.patches.FancyBboxPatch((x - 0.3, y - 0.32), 0.6, 0.64, boxstyle="round,pad=0.02",
-                                                               facecolor=TIER_COLORS[v], edgecolor="none"))
-                ax.text(x, y, str(v), ha="center", va="center", fontsize=9, fontweight="bold",
-                        color="white" if v >= 3 else INK)
-            else:
-                ax.text(x, y, f"{v:+.2f}" if j in (0, 4) else f"{v:.2f}", ha="center", va="center", fontsize=8.5, color=INK)
-    ax.plot([x_cols[3] + 0.6, x_cols[3] + 0.6], [0.3, len(rows) + 0.9], color=AXIS, lw=0.8)
-    ax.text(0.1, len(rows) + 1.15, "Tier 0 unsafe (mean over budget) · 1 mean within budget · 2 + V ≤ 0.5 · "
-            "3 + V ≤ 0.1 and D_norm+ ≤ 0.1 · 4 no violations.  Goal Point L1, seed means.", fontsize=7.8, color=INK2)
-    save(fig, "fig25_safety_tiers")
 
 
 def _fixed_groups(runs):
@@ -1257,6 +1160,61 @@ def fig34_mean_vs_share_all_tasks(runs):
 
 
 # The paper's main figures, in the order the paper uses them (figures/paper/).
+def fig35_final_exceedance_button(runs):
+    """Final greedy policy on Button: share of episodes costing more than x budgets (exceedance curve).
+
+    One curve per method, pooled over seeds; its height at x = 1 (the budget) is the violation
+    rate V, and how far right it reaches is the size of the violations (the tail). Default PPO-Lag
+    and unconstrained PPO (experiment 11) only have the final CDF logged at A.CDF_THRESHOLDS,
+    because wandb dropped their raw 1000-value lists, so they are drawn as dots at those
+    thresholds joined by straight lines (seed mean). The experiment-14 levers attach the raw
+    per-episode costs (.final_eval_episodes.npz), so their curves are exact.
+    """
+    env = "safe_button_point"
+    xs_budgets = np.linspace(0, 4, 401)
+    with plt.rc_context({"font.size": 11.5}):
+        fig, ax = plt.subplots(figsize=(7.6, 4.6))
+        curves = []                                          # (label, color, V in %) for the legend
+        # Experiment 11: CDF at the logged thresholds only (D_norm = (C - d) / d, so C/d = 1 + D_norm).
+        for alg, ls in (("ppo", "--"), ("ppo_lag", "-")):
+            rs = task_runs(runs, alg, env)
+            arr = np.array([A.final_cdf(r, "greedy") for r in rs]) if rs else np.empty((0, 0))
+            if not arr.size or not np.isfinite(arr).any():
+                continue
+            x = 1 + np.array(A.CDF_THRESHOLDS)
+            y = 100 * (1 - np.nanmean(arr, 0))
+            label = "PPO (no constraint)" if alg == "ppo" else "PPO-Lag, default (target 25)"
+            ax.plot(x, y, color=ALG_COLOR[alg], ls=ls, lw=2, marker="o", ms=5, markeredgecolor="white",
+                    markeredgewidth=1.2, zorder=3)
+            curves.append((label, ALG_COLOR[alg], ls, float(y[list(A.CDF_THRESHOLDS).index(0.0)])))
+        # Experiment 14: exact curves from the raw per-episode costs, pooled over seeds.
+        for m in BUTTON_LEVERS:
+            costs = [r.final_eval("greedy", "episode_costs") for r in m.runs(runs)]
+            costs = [np.asarray(c, float) for c in costs if c]
+            if not costs:
+                continue
+            c = np.concatenate(costs) / D
+            y = np.array([100 * np.mean(c > x) for x in xs_budgets])
+            ax.plot(xs_budgets, y, color=m.color, lw=2.2, zorder=3)
+            curves.append((m.label, m.color, "-", 100 * float(np.mean(c > 1.0))))
+        # Mark V on each curve at the budget line and name it in the legend (never colour alone).
+        handles = []
+        for label, color, ls, v in curves:
+            ax.plot([1.0], [v], marker="o", ms=8, color=color, markeredgecolor="white", markeredgewidth=1.4, zorder=5)
+            handles.append(plt.Line2D([], [], color=color, ls=ls, lw=2, label=f"{label}  (V = {v:.0f}%)"))
+        ax.axvline(1.0, color=INK, lw=1.2, ls="--", zorder=2)
+        ax.text(1.04, 98, f"budget d = {D:.0f}", color=INK, va="top")
+        ax.set_xlim(0, 4)
+        ax.set_ylim(0, 100)
+        ax.set_xticks([0, 0.5, 1, 1.5, 2, 3, 4])
+        ax.set_xticklabels(["0", "0.5×", "1×", "1.5×", "2×", "3×", "4×"])
+        ax.set_xlabel("Episode cost, as a multiple of the budget")
+        ax.set_ylabel("% of final-policy episodes costing more")
+        # Legend below the axes: inside, it would cover the budget label and the PPO curve.
+        ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.17), ncol=2, fontsize=10.5)
+        save(fig, "fig35_final_exceedance_button")
+
+
 PAPER = [
     fig34_mean_vs_share_all_tasks,    # RQ1: V is set by the mean alone, all tasks        (Fig. 1)
     fig17_levels_metrics,             # RQ1: harder levels, the mean holds, the tail grows (Fig. 2)
@@ -1271,15 +1229,16 @@ PAPER = [
 # the in-depth report (figures/supplement/). Not in the paper's main text.
 SUPPLEMENT = [
     fig01_measurement_mean_vs_tail, fig02_lockstep, fig33_reproducibility,   # measurement
-    fig16_levels_curves, fig18_ant_curves, fig19_ant_metrics,                 # RQ1 detail
-    fig06_algos_tradeoff, fig13_lr_dose_response, fig27_fixed_penalties,      # RQ2 detail
+    fig18_ant_curves, fig19_ant_metrics,                                      # RQ1 detail
+    fig13_lr_dose_response, fig27_fixed_penalties,                           # RQ2 detail
     fig31_tails_goal, fig28_cpo_diagnostics,                                  # discussion
-    fig25_safety_tiers, fig29_tasks_curves, fig30_tasks_final,                # Spoor metrics, other tasks
+    fig29_tasks_curves, fig30_tasks_final,                                    # other tasks
+    fig35_final_exceedance_button,                                            # final-policy cost distribution, Button
 ]
 # fig01-fig21 (first report, 30 Sep) are drawn from first-batch runs only (analysis_lib.batch1)
 # so their numbers never change; everything else uses every downloaded run.
 FIRST_REPORT = [fig01_measurement_mean_vs_tail, fig02_lockstep, fig03_algos_cost_curves,
-                fig06_algos_tradeoff, fig13_lr_dose_response, fig16_levels_curves,
+                fig13_lr_dose_response,
                 fig17_levels_metrics, fig18_ant_curves, fig19_ant_metrics]
 FIGURES = PAPER + SUPPLEMENT
 

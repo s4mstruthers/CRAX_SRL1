@@ -8,7 +8,7 @@ Everything here runs on a laptop; it only reads the exported CSV files.
 | `download_wandb.py` | Exports every run in wandb groups starting with `safety` to `wandb_exports/<group>/<run>.csv` (one row per logged wandb row), plus `<run>.summary.json` (the final-policy evaluation) and, for runs from 6 Oct on, `<run>.final_eval_episodes.npz` (raw per-episode final-evaluation costs and rewards). Files that already exist are skipped. |
 | `summarise_runs.py` | Quick one-line-per-run summary (standard library only) written to `run_summary.csv`. |
 | `analysis_lib.py` | Shared loading, cleaning and metric definitions. The figures and the quoted numbers both use it, so they cannot disagree. |
-| `make_figures.py` | Draws the paper's 8 main figures to `figures/paper/` and 14 supporting figures to `figures/supplement/` (`--paper` for the main set only, `--pdf` also writes vector PDFs). The `PAPER` and `SUPPLEMENT` lists at the bottom of the file are the single source of what exists; `git show main:safety_analysis/make_figures.py` has the figures removed on 11 Oct. |
+| `make_figures.py` | Draws the paper's 8 main figures to `figures/paper/` and 12 supporting figures to `figures/supplement/` (`--paper` for the main set only, `--pdf` also writes vector PDFs). The `PAPER` and `SUPPLEMENT` lists at the bottom of the file are the single source of what exists; `git show main:safety_analysis/make_figures.py` has the figures removed on 11 Oct (and fig06, fig16, fig25, removed on 12 Oct). |
 | `key_numbers.py` | Prints every number quoted in the reports and writes them to `figures/key_numbers.json`. |
 
 `wandb_exports/`, `figures/` and `*.csv` are git-ignored: they are large or can be regenerated.
@@ -20,7 +20,7 @@ From the repo folder:
 ```bash
 python -m pip install numpy matplotlib          # only if they are missing
 python safety_analysis/download_wandb.py        # once, or again after new runs finish
-python safety_analysis/make_figures.py          # all 22 figures (under a minute)
+python safety_analysis/make_figures.py          # all 20 figures (under a minute)
 python safety_analysis/make_figures.py --paper  # the 8 main-text figures only
 python safety_analysis/make_figures.py --pdf    # the same, plus vector PDF copies
 python safety_analysis/make_figures.py fig07    # one figure
@@ -56,8 +56,9 @@ asks two questions: (RQ1) how the per-episode violation rate V depends on the me
 | 7 | fig24_training_vs_final | Training-time vs final-policy safety, per run |
 | 8 | fig23_cdfs | CDFs of D_norm (Spoor et al. Fig. 2 style): training, final stochastic, final greedy |
 
-`figures/supplement/` holds the 14 supporting figures (measurement checks, level and Ant curves,
-lambda-rate dose-response, penalties, tails, CPO diagnostics, safety tiers, other-task curves); the
+`figures/supplement/` holds the 12 supporting figures (measurement checks, Ant curves,
+lambda-rate dose-response, penalties, tails, CPO diagnostics, other-task curves, and fig35: the
+final-policy cost distribution on Button as an exceedance curve, added 12 Oct); the
 `SUPPLEMENT` list in `make_figures.py` says which.
 
 ### Experiment 14: levers on Button (`scripts/snellius/14_levers_button.sh`)
@@ -78,7 +79,6 @@ they stay exactly as before.
 | fig22_final_eval_goal | Final policy on Goal Point L1, all 13 methods: V, mean cost, D_norm+, reward; stochastic (open) vs greedy (filled) |
 | fig23_cdfs | CDF of D_norm (Spoor et al. Fig. 2 style): during training vs final stochastic vs final greedy; methods and variants |
 | fig24_training_vs_final | Per run: % of training episodes over budget vs % of final greedy episodes over budget (all tasks) |
-| fig25_safety_tiers | Spoor et al. safety tiers (0-4) with D_norm, V, D_norm+, during training and for the final greedy policy |
 | fig26_fixed_baselines | Fixed baselines vs their CRAX defaults (PID, P3O, Saute, tighter target, tail-driven λ): cost and reward |
 | fig27_fixed_penalties | λ / κ of the fixed baselines |
 | fig28_cpo_diagnostics | CPO vs PPO-Lag/FOCOPS (cost, reward), share of updates per optimisation case, line search, KL, constraint value c |
