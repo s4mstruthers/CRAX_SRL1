@@ -57,6 +57,9 @@ def train(
         safety_bound: float = 0.0,
         lagrangian_coef_rate: float = 0.01,
         initial_lambda_lagr: float = 0.0,
+        # Lower bound on lambda: it still adapts, but never drops below this value.
+        # 0.0 (default) is standard PPO-Lag. The budget d is unchanged.
+        penalty_floor: float = 0.0,
         # What drives lambda: 'mean' (standard, per-step mean cost vs d/T), 'violation_rate'
         # (share of finished episodes over d vs chance_delta) or 'cvar' (mean of the worst 5%
         # of finished episodes vs d). The last two use the per-update episode metrics.
@@ -179,7 +182,8 @@ def train(
             # NaN when no (valid) episode finished in this update: leave lambda unchanged.
             cost_violation = jnp.where(jnp.isfinite(cost_violation), cost_violation, 0.0)
             delta_lambda = cost_violation * tail_lagrangian_rate
-        updated_lambda_lagr = jax.nn.relu(training_state.aux_state + delta_lambda)
+        updated_lambda_lagr = jnp.maximum(training_state.aux_state + delta_lambda, penalty_floor)
+        updated_lambda_lagr = jax.nn.relu(updated_lambda_lagr)
         new_training_state = training_state.replace(aux_state=updated_lambda_lagr)
         return new_training_state, {'lambda_lagr': updated_lambda_lagr, 'cost_violation': cost_violation}
 
@@ -198,7 +202,7 @@ def train(
 
     # Initialize aux_state with the initial Lagrange multiplier
     def init_aux_state_fn():
-        return jnp.array([initial_lambda_lagr], dtype=jnp.float32)
+        return jnp.array([max(initial_lambda_lagr, penalty_floor)], dtype=jnp.float32)
 
     # Extra fields to collect during rollout (including cost)
     extra_fields = ('truncation', 'episode_metrics', 'episode_done', 'cost')

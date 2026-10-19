@@ -468,14 +468,15 @@ def fig13_lr_dose_response(runs):
 
 def fig17_levels_metrics(runs):
     """Metrics against difficulty level for PPO and the three constrained algorithms."""
-    panels = [("avg_cost", "Average training cost per episode", (10, 200), [10, 25, 50, 100, 200]),
-              ("ep_share_over", "% of training episodes over budget", (0, 105), None),
-              ("ep_share_over_2x", "% of episodes over 2× budget", (0, 105), None),
-              ("ep_final_p99", "Episode p99 (worst 1%), final quarter", (20, 1000), [25, 50, 100, 200, 500, 1000]),
-              ("reward_final", "Episode reward, last 10 updates", (0, 42), None),
-              ("pct_over_10pct", "% of updates >10% over budget", (0, 105), None)]
-    fig, axes = plt.subplots(2, 3, figsize=(12, 6.8), gridspec_kw={"hspace": 0.35, "wspace": 0.22})
-    for ax, (key, title, ylim, log_ticks) in zip(axes.flat, panels):
+    # (key, title, y-axis label, y limits, log-scale ticks or None)
+    panels = [("avg_cost", "Average training cost per episode", "Cost per episode (log scale)", (10, 200), [10, 25, 50, 100, 200]),
+              ("ep_share_over", "% of training episodes over budget", "% of episodes", (0, 105), None),
+              ("ep_share_over_2x", "% of training episodes over 2× budget", "% of episodes", (0, 105), None),
+              ("ep_final_p99", "Worst 1% of episodes (p99), last quarter", "Episode cost (log scale)", (20, 1000), [25, 50, 100, 200, 500, 1000]),
+              ("reward_final", "Episode reward, last 10 updates", "Reward per episode", (0, 42), None),
+              ("pct_over_10pct", "% of policy updates with mean cost >10% over budget", "% of updates", (0, 105), None)]
+    fig, axes = plt.subplots(2, 3, figsize=(12.6, 6.8), gridspec_kw={"hspace": 0.38, "wspace": 0.32})
+    for ax, (key, title, ylabel, ylim, log_ticks) in zip(axes.flat, panels):
         for alg in ["ppo"] + LEVEL_ALGS:
             trend_dots(ax, [1, 2, 3], [metric_values(level_runs(runs, alg, lv), key) for lv in [1, 2, 3]], ALG_COLOR[alg], label=LABEL[alg])
         if log_ticks:
@@ -486,6 +487,7 @@ def fig17_levels_metrics(runs):
         ax.set_xticklabels(["Level 1", "Level 2", "Level 3"])
         ax.set_xlim(0.75, 3.25)                     # margin so the edge labels are not clipped
         ax.set_title(title, loc="left", color=INK, fontsize=9.5)
+        ax.set_ylabel(ylabel)
         if key in ("avg_cost", "ep_final_p99"):
             budget_line(ax, label=False)
     # One shared legend in a row above the panels, so it never covers any data.
@@ -1215,6 +1217,68 @@ def fig35_final_exceedance_button(runs):
         save(fig, "fig35_final_exceedance_button")
 
 
+# =================================================================================
+# Experiment 15 (scripts/snellius/15_penalty_floor.sh, supervisor feedback 12 Oct): one
+# hyperparameter change, a floor on the cost-penalty weight, applied to three algorithms with
+# the budget d = 25 unchanged. Empty arms are skipped until their runs are downloaded.
+# =================================================================================
+FLOOR_ALGS = [("ppo_lag", "PPO-Lag"), ("focops", "FOCOPS"), ("p3o", "P3O")]
+FLOOR_TASKS = [("safe_goal_point", "Goal, Level 1 (T = 1000)"), ("safe_button_point", "Button, Level 1 (T = 2000)")]
+
+
+def floor_arms(runs, alg, env):
+    """(default runs, floored runs) for one algorithm and task.
+
+    Defaults: PPO-Lag / FOCOPS from experiments 10 (Goal) and 11 (Button); P3O from experiment
+    15. Floored: PPO-Lag / FOCOPS from experiment 15 (floor ~3x their default equilibrium);
+    P3O with kappa fixed at 20 from experiments 09 (Goal) and 14 (Button), i.e. floor = 20.
+    """
+    goal = env == "safe_goal_point"
+    if alg == "p3o":
+        default = A.select(runs, experiment="penalty_floor", alg="p3o", env=env,
+                           variant="default" if goal else "T2000-default")
+        floored = (A.select(runs, experiment="fixed_baselines", alg="p3o", env=env,
+                            variant="initial_kappa-20-kappa_increase_factor-1.0-kappa_decrease_factor-1.0") if goal
+                   else A.select(runs, experiment="levers_button", alg="p3o", env=env, variant="T2000-fixed_kappa-20"))
+    else:
+        default = (A.select(runs, experiment="core_rerun", alg=alg, env=env) if goal
+                   else A.select(runs, experiment="other_tasks", alg=alg, env=env, variant="episode_length-2000"))
+        floored = [r for r in A.select(runs, experiment="penalty_floor", alg=alg, env=env) if "floor" in r.variant]
+    return default, floored
+
+
+def fig36_penalty_floor(runs):
+    """Final greedy policy, default vs penalty floor, per algorithm: V, D_norm+ and reward.
+
+    Rows: tasks. Open circles: CRAX default; filled: with the penalty floor. Short bars are
+    seed means; the label above each algorithm is the floored mean.
+    """
+    panels = [("violation_rate", 100, "Over budget, V (%)", "{:.0f}%", (-3, 75), False),
+              ("d_norm_plus", 1, "Overshoot when over, D_norm+ (log)", "{:.2f}", (0.02, 10), True),
+              ("reward_mean", 1, "Mean episode reward", "{:.0f}", None, False)]
+    fig, axes = plt.subplots(len(FLOOR_TASKS), len(panels), figsize=(13, 6.6),
+                             gridspec_kw={"hspace": 0.55, "wspace": 0.22})
+    for row, (env, task_name) in zip(axes, FLOOR_TASKS):
+        arms = [floor_arms(runs, a, env) for a, _ in FLOOR_ALGS]
+        for ax, (metric, scale, title, fmt, ylim, logy) in zip(row, panels):
+            default = [final_values(d, "greedy", metric, scale) for d, _ in arms]
+            floored = [final_values(f, "greedy", metric, scale) for _, f in arms]
+            paired_dotplot(ax, [name for _, name in FLOOR_ALGS], default, floored,
+                           [ALG_COLOR[a] for a, _ in FLOOR_ALGS], fmt=fmt, ylim=ylim, logy=logy,
+                           floor=ylim[0] * 1.15 if logy else None)
+            ax.set_title(f"{task_name}\n{title}", loc="left", color=INK, fontsize=9)
+            if logy:
+                plain_log_ticks(ax, [0.05, 0.1, 0.25, 0.5, 1, 2, 5])
+    keys = [plt.Line2D([], [], ls="", marker="o", ms=5.5, markerfacecolor="white", markeredgecolor=INK2,
+                       label="open: CRAX default"),
+            plt.Line2D([], [], ls="", marker="o", ms=5.5, color=INK2, label="filled: penalty floor (budget unchanged)"),
+            plt.Line2D([], [], color=INK, lw=1.3, label="bar: mean of seeds")]
+    legend_above(fig, keys, top=0.9)
+    fig.text(0.5, 0.005, "Final greedy policy, 1000 evaluation episodes per run. Floors: PPO-Lag λ ≥ 2 (Goal) / 8 (Button), "
+             "FOCOPS ν ≥ 2 / 1.5, P3O κ = 20.", ha="center", fontsize=8, color=INK2)
+    save(fig, "fig36_penalty_floor")
+
+
 PAPER = [
     fig34_mean_vs_share_all_tasks,    # RQ1: V is set by the mean alone, all tasks        (Fig. 1)
     fig17_levels_metrics,             # RQ1: harder levels, the mean holds, the tail grows (Fig. 2)
@@ -1224,6 +1288,7 @@ PAPER = [
     fig26_fixed_baselines,            # RQ2: cost and reward curves of the levers          (Fig. 6)
     fig24_training_vs_final,          # training-time vs final-policy safety               (Fig. 7)
     fig23_cdfs,                       # Spoor-style CDFs of D_norm                         (Fig. 8)
+    fig36_penalty_floor,              # RQ2: one penalty floor, three algorithms (exp. 15)
 ]
 # Supporting figures for the two-page reproducibility supplement and for the appendix of
 # the in-depth report (figures/supplement/). Not in the paper's main text.

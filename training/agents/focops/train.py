@@ -55,6 +55,8 @@ def train(
         initial_nu: float = 0.1,
         nu_lr: float = 1.0,
         nu_max: float = 200.0,
+        # Lower bound on nu (see PPO-Lag's penalty_floor). 0.0 = standard FOCOPS.
+        penalty_floor: float = 0.0,
         focops_lam: float = 1.5,
         focops_eta: float = 0.02,
         # Eval params
@@ -87,7 +89,7 @@ def train(
         nu = training_state.aux_state
         avg_cost = jnp.mean(metrics['mean_cost'][-1])
         cost_violation = avg_cost - per_step_safety_bound
-        updated_nu = jnp.clip(jax.nn.relu(nu + nu_lr * cost_violation), 0.0, nu_max)
+        updated_nu = jnp.clip(jax.nn.relu(nu + nu_lr * cost_violation), penalty_floor, nu_max)
         new_state = training_state.replace(aux_state=updated_nu)
         return new_state, {'nu': updated_nu, 'cost_violation': cost_violation}
 
@@ -104,7 +106,7 @@ def train(
             gae_lambda=gae_lambda, normalize_advantage=normalize_advantage)
 
     def init_aux_state_fn():
-        return jnp.array([initial_nu], dtype=jnp.float32)
+        return jnp.array([max(initial_nu, penalty_floor)], dtype=jnp.float32)
 
     effective_restore_params = pretrained_params if pretrained_params is not None else restore_params
 

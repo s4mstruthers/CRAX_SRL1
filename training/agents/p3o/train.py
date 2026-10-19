@@ -60,6 +60,9 @@ def train(
         # 0.9 is the CRAX default; since 1.1 * 0.9 < 1, a run over budget half the time
         # drifts kappa down. initial_kappa=K with both factors 1.0 gives a fixed penalty K.
         kappa_decrease_factor: float = 0.9,
+        # Lower bound on kappa (see PPO-Lag's penalty_floor). 0.0 = CRAX default, where
+        # kappa is floored at initial_kappa only.
+        penalty_floor: float = 0.0,
         # Eval params
         num_evals: int = 0,
         eval_env: Optional[envs.Env] = None,
@@ -97,7 +100,7 @@ def train(
         updated_kappa = jnp.where(
             constraint_violated,
             jnp.minimum(kappa * kappa_increase_factor, kappa_max),
-            jnp.maximum(kappa * kappa_decrease_factor, initial_kappa),
+            jnp.maximum(kappa * kappa_decrease_factor, max(initial_kappa, penalty_floor)),
         )
         new_state = training_state.replace(aux_state=(updated_kappa, cost_violation))
         return new_state, {'kappa': updated_kappa, 'cost_violation': cost_violation[0]}
@@ -116,7 +119,7 @@ def train(
             gae_lambda=gae_lambda, clipping_epsilon=clipping_epsilon, normalize_advantage=normalize_advantage)
 
     def init_aux_state_fn():
-        return (jnp.array([initial_kappa], dtype=jnp.float32), jnp.array([0.0], dtype=jnp.float32))
+        return (jnp.array([max(initial_kappa, penalty_floor)], dtype=jnp.float32), jnp.array([0.0], dtype=jnp.float32))
 
     effective_restore_params = pretrained_params if pretrained_params is not None else restore_params
 

@@ -181,6 +181,33 @@ define_levers_button() {
   done
 }
 
+# 15 Penalty floor (supervisor feedback, 12 Oct): one hyperparameter change, applied to three
+#    algorithms, that leaves the budget d = 25 untouched. The penalty weight (lambda in PPO-Lag,
+#    nu in FOCOPS, kappa in P3O) still adapts but never drops below a floor. Rule used for the
+#    floor: about 3x the value the weight settles at in the default runs (last quarter of
+#    training, wandb exports): PPO-Lag lambda ~0.66 on Goal / ~2.6 on Button; FOCOPS nu ~0.69 /
+#    ~0.52. P3O's floor arm already exists: kappa fixed at 20 (experiments 09 and 14), which
+#    rarely needs to rise above 20 because those runs stay under budget.
+#    P3O default runs are added because no default P3O run has the final-policy evaluation yet.
+#    Same settings as the defaults they are compared with: Goal = experiment 10 (T = 1000,
+#    30M steps), Button = experiment 11 (T = 2000, 50M steps).
+define_penalty_floor() {
+  local s
+  for s in 0 1 2; do
+    # Goal Point L1, T = 1000
+    add_task penalty_floor 20 ppo_lag safe_goal_point 1 2048 $s 3e7 "--penalty_floor 2.0" "floor-2"
+    add_task penalty_floor 20 focops  safe_goal_point 1 2048 $s 3e7 "--penalty_floor 2.0" "floor-2"
+    add_task penalty_floor 20 p3o     safe_goal_point 1 2048 $s 3e7 "" "default"
+    # Button L1, T = 2000
+    add_task penalty_floor 20 ppo_lag safe_button_point 1 2048 $s 5e7 \
+      "--episode_length 2000 --penalty_floor 8.0" "T2000-floor-8"
+    add_task penalty_floor 20 focops  safe_button_point 1 2048 $s 5e7 \
+      "--episode_length 2000 --penalty_floor 1.5" "T2000-floor-1.5"
+    add_task penalty_floor 20 p3o     safe_button_point 1 2048 $s 5e7 \
+      "--episode_length 2000" "T2000-default"
+  done
+}
+
 # ---------------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------------

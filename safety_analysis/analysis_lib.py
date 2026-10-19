@@ -98,7 +98,7 @@ def parse_group(group: str) -> Dict:
     safety_<alg>_<lockstep|desync> and are labelled experiment 'study01'.
     """
     m = re.match(r"safety_(compare_algos|parallel_envs|long_runs|harder_levels|ant_velocity|lambda_lr|smoke_test|"
-                 r"fixed_baselines|core_rerun|other_tasks|smoke_new|cpo|levers_button)_"
+                 r"fixed_baselines|core_rerun|other_tasks|smoke_new|cpo|levers_button|penalty_floor)_"
                  r"(ppo_lag|ppo_pid|ppo_saute|ppo|crpo|cpo|focops|p3o)_(.+?)_L(\d)_n(\d+)(?:_lr(\d+)|_(.+))?$", group)
     if m:
         exp, alg, env, level, n, lr, variant = m.groups()

@@ -189,6 +189,10 @@ def add_shared_training_args(parser: argparse.ArgumentParser) -> argparse.Argume
     parser.add_argument("--initial_kappa", type=float, default=0.01, help="P3O: initial kappa (cost penalty)")
     parser.add_argument("--kappa_increase_factor", type=float, default=1.1, help="P3O: multiplicative factor for kappa when constraint violated")
     parser.add_argument("--kappa_max", type=float, default=50.0, help="P3O: maximum kappa value")
+    # --- Penalty floor (PPO-Lag, FOCOPS, P3O) ---
+    parser.add_argument("--penalty_floor", type=float, default=0.0,
+                        help="Lower bound on the cost-penalty weight (PPO-Lag lambda, FOCOPS nu, P3O kappa). "
+                             "The weight still adapts above it. 0 = CRAX default (no floor)")
     parser.add_argument("--kappa_decrease_factor", type=float, default=0.9,
                         help="P3O: multiplicative factor for kappa when the constraint is satisfied (1.0 = never decrease)")
 
