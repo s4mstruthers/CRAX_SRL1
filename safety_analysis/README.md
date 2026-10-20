@@ -9,6 +9,7 @@ Everything here runs on a laptop; it only reads the exported CSV files.
 | `summarise_runs.py` | Quick one-line-per-run summary (standard library only) written to `run_summary.csv`. |
 | `analysis_lib.py` | Shared loading, cleaning and metric definitions. The figures and the quoted numbers both use it, so they cannot disagree. |
 | `make_figures.py` | Draws the paper's 8 main figures to `figures/paper/` and 12 supporting figures to `figures/supplement/` (`--paper` for the main set only, `--pdf` also writes vector PDFs). The `PAPER` and `SUPPLEMENT` lists at the bottom of the file are the single source of what exists; `git show main:safety_analysis/make_figures.py` has the figures removed on 11 Oct (and fig06, fig16, fig25, removed on 12 Oct). |
+| `illustrations.py` | Explanatory figures with no run data (for talks and the introduction) to `figures/illustration/`: `ill01_same_mean_different_risk`, three cost distributions with the same mean (= budget) but different V and tails. |
 | `key_numbers.py` | Prints every number quoted in the reports and writes them to `figures/key_numbers.json`. |
 
 `wandb_exports/`, `figures/` and `*.csv` are git-ignored: they are large or can be regenerated.
@@ -55,6 +56,8 @@ asks two questions: (RQ1) how the per-episode violation rate V depends on the me
 | 6 | fig26_fixed_baselines | RQ2: cost and reward curves of each lever vs its CRAX default |
 | 7 | fig24_training_vs_final | Training-time vs final-policy safety, per run |
 | 8 | fig23_cdfs | CDFs of D_norm (Spoor et al. Fig. 2 style): training, final stochastic, final greedy |
+| 9 | fig36_penalty_floor | RQ2: penalty floor (experiments 15/16), one-glance summary: % of episodes over budget and reward kept, CRAX default vs floor, per algorithm and task |
+| 10 | fig37_floor_distributions | RQ2: penalty floor, final-policy episode-cost distributions, CRAX default vs floor, PPO-Lag / FOCOPS / P3O on Goal and Button |
 
 `figures/supplement/` holds the 12 supporting figures (measurement checks, Ant curves,
 lambda-rate dose-response, penalties, tails, CPO diagnostics, other-task curves, and fig35: the

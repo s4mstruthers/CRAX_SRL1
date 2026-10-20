@@ -1253,39 +1253,12 @@ def floor_arms(runs, alg, env):
     return default, floored
 
 
-def fig36_penalty_floor(runs):
-    """Final greedy policy, default vs penalty floor, per algorithm: V, D_norm+ and reward.
-
-    Rows: tasks. Open circles: CRAX default; filled: with the penalty floor. Short bars are
-    seed means; the label above each algorithm is the floored mean.
-    """
-    panels = [("violation_rate", 100, "Over budget, V (%)", "{:.0f}%", (-3, 103), False),
-              ("d_norm_plus", 1, "Overshoot when over, D_norm+ (log)", "{:.2f}", (0.02, 10), True),
-              ("reward_mean", 1, "Mean episode reward", "{:.0f}", None, False)]
-    fig, axes = plt.subplots(len(FLOOR_TASKS), len(panels), figsize=(13, 6.6),
-                             gridspec_kw={"hspace": 0.55, "wspace": 0.22})
-    for row, (env, task_name) in zip(axes, FLOOR_TASKS):
-        arms = [floor_arms(runs, a, env) for a, _ in FLOOR_ALGS]
-        for ax, (metric, scale, title, fmt, ylim, logy) in zip(row, panels):
-            default = [final_values(d, "greedy", metric, scale) for d, _ in arms]
-            floored = [final_values(f, "greedy", metric, scale) for _, f in arms]
-            paired_dotplot(ax, [name for _, name in FLOOR_ALGS], default, floored,
-                           [ALG_COLOR[a] for a, _ in FLOOR_ALGS], fmt=fmt, ylim=ylim, logy=logy,
-                           floor=ylim[0] * 1.15 if logy else None)
-            ax.set_title(f"{task_name}\n{title}", loc="left", color=INK, fontsize=9)
-            if logy:
-                plain_log_ticks(ax, [0.05, 0.1, 0.25, 0.5, 1, 2, 5])
-    keys = [plt.Line2D([], [], ls="", marker="o", ms=5.5, markerfacecolor="white", markeredgecolor=INK2,
-                       label="open: CRAX default"),
-            plt.Line2D([], [], ls="", marker="o", ms=5.5, color=INK2, label="filled: penalty floor (budget unchanged)"),
-            plt.Line2D([], [], color=INK, lw=1.3, label="bar: mean of seeds")]
-    legend_above(fig, keys, top=0.9)
-    fig.text(0.5, 0.005, "Final greedy policy, 1000 evaluation episodes per run. Floors: PPO-Lag λ ≥ 2 (Goal) / 8 (Button), "
-             "FOCOPS ν ≥ 2 / 1.5, P3O κ = 20.", ha="center", fontsize=8, color=INK2)
-    save(fig, "fig36_penalty_floor")
-
-
-FLOOR_GREY, FLOOR_BLUE = "#8a8983", "#2a78d6"     # CRAX default (neutral reference) / with floor
+FLOOR_GREY, FLOOR_GREY_DARK, FLOOR_BLUE = "#a3a29c", "#6b6a64", "#2a78d6"   # CRAX default / its over-budget part / floor
+# What "default" and "floor" mean for each algorithm (shown under its name in fig37).
+FLOOR_SETTINGS = {"ppo_lag": "default: λ adapts, starts at 0\nfloor: λ ≥ 2 (Goal), λ ≥ 8 (Button)",
+                  "focops": "default: ν adapts, starts at 0.1\nfloor: ν ≥ 2 (Goal), ν ≥ 1.5 (Button)",
+                  "p3o": "default: κ ramps up from 0.01\nfloor: κ fixed at 20 (both tasks)"}
+PRINT_W = 7.0                       # inches: full text width of the two-column ACM layout, so text prints at true size
 
 
 def pooled_costs(rs):
@@ -1295,75 +1268,141 @@ def pooled_costs(rs):
     return np.concatenate(costs) if costs else np.empty(0)
 
 
-def fig37_floor_distributions(runs, envs=("safe_goal_point", "safe_button_point")):
-    """Where do final-policy episodes land relative to the budget, before and after the floor?
+def arm_means(rs):
+    """Seed means of the final greedy violation rate (%) and reward."""
+    v = np.array(final_values(rs, "greedy", "violation_rate", 100), float)
+    r = np.array(final_values(rs, "greedy", "reward_mean"), float)
+    return (np.nanmean(v) if v.size else np.nan), (np.nanmean(r) if r.size else np.nan)
 
-    One panel per algorithm and task. Each curve is the share of the final greedy policy's
-    episodes at each episode cost (pooled over seeds, bins of 2.5). Darker shading right of the
-    dashed budget line = episodes that break the budget. The box gives the two numbers that matter:
-    share over budget (V) and mean reward, default -> floor.
+
+def pct(x):
+    """Violation rate as text: one decimal below 1% so that 0.4% never reads as 0%."""
+    return "–" if not np.isfinite(x) else (f"{x:.1f}%" if 0 < x < 1 else f"{x:.0f}%")
+
+
+def fig36_penalty_floor(runs):
+    """Summary of the penalty floor: before -> after, for every algorithm and task.
+
+    Left: share of final-policy episodes over the budget. Right: reward, as a percentage of the
+    same algorithm's CRAX-default reward (100% = no reward lost). Grey dot = CRAX default, blue
+    dot = with the floor; seed means (3 seeds), final greedy policy, 1000 episodes per run.
     """
-    bins = np.arange(0, 100 + 2.5, 2.5)                      # 0 .. 4x budget; costs above go in the last bin
-    centres = bins[:-1]
-    tasks = [(e, n) for e, n in FLOOR_TASKS if e in envs]
-    with plt.rc_context({"font.size": 11}):
-        fig, axes = plt.subplots(len(tasks), len(FLOOR_ALGS), figsize=(14, 3.9 * len(tasks)), squeeze=False,
-                                 gridspec_kw={"hspace": 0.55, "wspace": 0.12})
-        for row, (env, task_name) in zip(axes, tasks):
-            for ax, (alg, name) in zip(row, FLOOR_ALGS):
+    rows = [(alg, name, env, task.split(",")[0]) for alg, name in FLOOR_ALGS for env, task in FLOOR_TASKS]
+    with plt.rc_context({"font.size": 8, "axes.titlesize": 8.5}):
+        fig, (ax_v, ax_r) = plt.subplots(1, 2, figsize=(PRINT_W, 2.7), sharey=True,
+                                         gridspec_kw={"wspace": 0.08, "width_ratios": [1, 1]})
+        ys = np.arange(len(rows))[::-1]
+        for y, (alg, name, env, task) in zip(ys, rows):
+            default, floored = floor_arms(runs, alg, env)
+            (v0, r0), (v1, r1) = arm_means(default), arm_means(floored)
+            rel = 100 * r1 / r0 if np.isfinite(r1) and r0 else np.nan
+            # Left panel: violation rate, default -> floor
+            ax_v.plot([v0, v1], [y, y], color=AXIS, lw=2, zorder=1, solid_capstyle="round")
+            ax_v.scatter([v0], [y], s=34, color=FLOOR_GREY_DARK, zorder=3)
+            ax_v.scatter([v1], [y], s=34, color=FLOOR_BLUE, zorder=3)
+            ax_v.text(v0, y + 0.2, pct(v0), fontsize=7, color=INK2, va="bottom", ha="center")
+            ax_v.text(v1, y - 0.2, pct(v1), fontsize=7, color=FLOOR_BLUE, va="top", ha="center")
+            # Right panel: reward relative to the default (100% = unchanged)
+            ax_r.plot([100, rel], [y, y], color=AXIS, lw=2, zorder=1, solid_capstyle="round")
+            ax_r.scatter([100], [y], s=34, color=FLOOR_GREY_DARK, zorder=3)
+            ax_r.scatter([rel], [y], s=34, color=FLOOR_BLUE, zorder=3)
+            ax_r.text(rel, y - 0.2, f"{rel:.0f}%", fontsize=7, color=FLOOR_BLUE, va="top", ha="center")
+        ax_v.set_yticks(ys)
+        ax_v.set_yticklabels([f"{name} · {task}" for _, name, _, task in rows])
+        for y in ys[1::2][:-1]:                              # thin separators between algorithms
+            for ax in (ax_v, ax_r):
+                ax.axhline(y - 0.5, color=GRID, lw=0.8, zorder=0)
+        ax_v.set_xlim(-4, 80)
+        ax_v.set_xlabel("Episodes over budget (%)")
+        ax_v.set_title("Episodes over budget (lower = safer)", loc="left")
+        ax_r.set_xlim(-8, 125)
+        ax_r.axvline(100, color=INK2, ls=":", lw=1, zorder=0)
+        ax_r.set_xlabel("Reward with floor, % of default reward")
+        ax_r.set_title("Reward kept (100% = no loss)", loc="left")
+        for ax in (ax_v, ax_r):
+            ax.grid(axis="y", visible=False)
+            ax.set_ylim(-0.6, len(rows) - 0.4)
+        keys = [plt.Line2D([], [], ls="", marker="o", ms=5.5, color=FLOOR_GREY_DARK, label="CRAX default"),
+                plt.Line2D([], [], ls="", marker="o", ms=5.5, color=FLOOR_BLUE, label="with penalty floor (budget unchanged)")]
+        fig.legend(handles=keys, loc="upper center", ncol=2, bbox_to_anchor=(0.55, 1.07), fontsize=8)
+        save(fig, "fig36_penalty_floor")
+
+
+def fig37_floor_distributions(runs, envs=("safe_goal_point", "safe_button_point")):
+    """Where final-policy episodes land relative to the budget, before and after the floor.
+
+    Columns: algorithms; rows: tasks. Each outline is the share of the final greedy policy's
+    episodes at each episode cost (seeds pooled, bins of 5). Shading right of the dashed budget
+    line = episodes that break the budget. The box gives the two headline numbers, default -> floor.
+    """
+    bins = np.arange(0, 100 + 5, 5)                          # 0 .. 4x budget; costs above 100 go in the last bin
+    left = bins[:-1]
+    tasks = [(e, n.split(",")[0]) for e, n in FLOOR_TASKS if e in envs]
+    with plt.rc_context({"font.size": 7.5, "axes.titlesize": 8.5, "xtick.labelsize": 7, "ytick.labelsize": 7}):
+        fig, axes = plt.subplots(len(tasks), len(FLOOR_ALGS), figsize=(PRINT_W, 2.1 * len(tasks) + 0.5),
+                                 squeeze=False, gridspec_kw={"hspace": 0.62, "wspace": 0.22})
+        for i, (row, (env, task_name)) in enumerate(zip(axes, tasks)):
+            for j, (ax, (alg, name)) in enumerate(zip(row, FLOOR_ALGS)):
                 default, floored = floor_arms(runs, alg, env)
-                ymax = 0
-                for rs, color, z in ((default, FLOOR_GREY, 2), (floored, FLOOR_BLUE, 3)):
+                shares = {}
+                for key, rs in (("default", default), ("floor", floored)):
                     c = pooled_costs(rs)
-                    if not c.size:
-                        continue
-                    share = 100 * np.histogram(np.clip(c, 0, bins[-1] - 1e-9), bins)[0] / c.size
-                    over = centres >= D                       # bins at or above the budget
-                    # Light fill below budget, full colour above it: the coloured area IS V.
-                    ax.fill_between(centres, share, step="post", color=color, alpha=0.18, lw=0, zorder=z)
-                    ax.fill_between(centres, np.where(over, share, 0), step="post", color=color, alpha=0.85,
-                                    lw=0, zorder=z)
-                    ax.step(centres, share, where="post", color=color, lw=1.6, zorder=z + 0.5)
-                    ymax = max(ymax, share[1:].max() if rs is floored else share.max())
-                # Keep the default's shape readable: a floored spike at cost ~0 is clipped and labelled.
-                top = max(ymax * 1.35, 8)
-                c_floor = pooled_costs(floored)
-                if c_floor.size:
-                    spike = 100 * np.mean(c_floor < bins[1])
-                    if spike > top:
-                        # Short label next to the clipped spike (no arrow across the panel).
-                        ax.text(3.5, top * 0.96, f"▲ {spike:.0f}% of episodes at cost ≈ 0", color=FLOOR_BLUE,
-                                fontsize=9.5, va="top", ha="left", zorder=7,
-                                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.9))
+                    if c.size:
+                        shares[key] = 100 * np.histogram(np.clip(c, 0, bins[-1] - 1e-9), bins)[0] / c.size
+                over = left >= D
+                # Default: grey area, darker where it is over budget.
+                if "default" in shares:
+                    s = shares["default"]
+                    ax.fill_between(left, s, step="post", color=FLOOR_GREY, alpha=0.35, lw=0, zorder=1)
+                    ax.fill_between(left, np.where(over, s, 0), step="post", color=FLOOR_GREY_DARK, alpha=0.9,
+                                    lw=0, zorder=2)
+                    ax.step(left, s, where="post", color=FLOOR_GREY_DARK, lw=0.9, zorder=2.5)
+                # Floor: blue outline, solid blue where it is over budget.
+                if "floor" in shares:
+                    s = shares["floor"]
+                    ax.fill_between(left, s, step="post", color=FLOOR_BLUE, alpha=0.12, lw=0, zorder=3)
+                    ax.fill_between(left, np.where(over, s, 0), step="post", color=FLOOR_BLUE, alpha=0.85,
+                                    lw=0, zorder=3.5)
+                    ax.step(left, s, where="post", color=FLOOR_BLUE, lw=1.3, zorder=4)
+                # y-range: fit the default's shape; a taller floor spike at cost ~0 is clipped and labelled.
+                peak_default = shares["default"].max() if "default" in shares else 0
+                peak_floor_rest = shares["floor"][1:].max() if "floor" in shares else 0
+                top = max(peak_default, peak_floor_rest, 8) * 1.3
+                if "floor" in shares and shares["floor"][0] > top:
+                    # Label the clipped bar in the empty top-right corner, on a white background.
+                    ax.text(6, top * 0.97, f"↑{shares['floor'][0]:.0f}%", color=FLOOR_BLUE, fontsize=7,
+                            va="top", ha="left", zorder=8)
                 ax.set_ylim(0, top)
                 ax.set_xlim(0, 100)
-                ax.axvline(D, color=INK, ls="--", lw=1.2, zorder=5)
+                ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(3, integer=True))
+                ax.axvline(D, color=INK, ls="--", lw=0.9, zorder=5)
                 ax.set_xticks([0, 25, 50, 75, 100])
-                ax.set_xticklabels(["0", "25\nbudget", "50", "75", "≥100"])
-
-                def v_and_reward(rs):
-                    v = final_values(rs, "greedy", "violation_rate", 100)
-                    r = final_values(rs, "greedy", "reward_mean")
-                    return (np.nanmean(v) if len(v) else np.nan), (np.nanmean(r) if len(r) else np.nan)
-                (v0, r0), (v1, r1) = v_and_reward(default), v_and_reward(floored)
-                fmt = lambda x, f: "–" if not np.isfinite(x) else (f"{x:.1f}%" if f.endswith('%') and 0 < x < 1 else f.format(x))
-                ax.text(0.97, 0.80, f"Over budget  {fmt(v0, '{:.0f}%')} → {fmt(v1, '{:.0f}%')}\n"
-                                    f"Reward  {fmt(r0, '{:.0f}')} → {fmt(r1, '{:.0f}')}",
-                        transform=ax.transAxes, ha="right", va="top", fontsize=10.5, color=INK,
-                        bbox=dict(boxstyle="round,pad=0.4", fc="white", ec=AXIS, lw=0.8), zorder=6)
-                ax.set_title(f"{name} · {task_name.split(' (')[0]}", loc="left", fontsize=11.5, color=INK)
-                ax.set_xlabel("Cost of one episode")
-                if ax is row[0]:
-                    ax.set_ylabel("% of episodes")
+                ax.set_xticklabels(["0", "25\nbudget", "50", "75", "100+"])
+                (v0, r0), (v1, r1) = arm_means(default), arm_means(floored)
+                change = f" ({100 * (r1 - r0) / r0:+.0f}%)" if np.isfinite(r1) and r0 else ""
+                ax.set_title(f"over budget: {pct(v0)} → {pct(v1)}\nreward: {change.strip(' ()')} vs default",
+                             loc="center", fontsize=7, fontweight="normal", color=INK, pad=4, linespacing=1.3)
+                if i == 0:      # algorithm name and its settings as a column header, above the numbers
+                    ax.text(0.5, 1.56, name, transform=ax.transAxes, ha="center", va="bottom",
+                            fontsize=9, fontweight="bold", color=INK)
+                    ax.text(0.5, 1.3, FLOOR_SETTINGS[alg], transform=ax.transAxes, ha="center", va="bottom",
+                            fontsize=6.5, color=INK2, linespacing=1.35)
+                if j == 0:
+                    ax.set_ylabel(f"{task_name} task\n% of episodes", color=INK)
+                if i == len(tasks) - 1:
+                    ax.set_xlabel("Cost of one episode")
                 ax.grid(axis="x", visible=False)
-        keys = [plt.Rectangle((0, 0), 1, 1, color=FLOOR_GREY, alpha=0.85, label="CRAX default"),
-                plt.Rectangle((0, 0), 1, 1, color=FLOOR_BLUE, alpha=0.85, label="with penalty floor (budget still 25)")]
-        fig.legend(handles=keys, loc="upper center", ncol=2, frameon=False, fontsize=11,
-                   bbox_to_anchor=(0.5, 1.0 if len(tasks) > 1 else 1.06))
-        fig.text(0.5, -0.02 if len(tasks) > 1 else -0.08,
-                 "Final greedy policy, 1000 episodes per run, seeds pooled. Dark shading = episodes over the budget (V). "
-                 "Floors: PPO-Lag λ ≥ 2 / 8, FOCOPS ν ≥ 2 / 1.5, P3O κ = 20.",
-                 ha="center", fontsize=9, color=INK2)
+        keys = [matplotlib.patches.Patch(color=FLOOR_GREY, alpha=0.6, label="CRAX default"),
+                matplotlib.patches.Patch(color=FLOOR_BLUE, alpha=0.5, label="with penalty floor (budget unchanged)"),
+                matplotlib.patches.Patch(color=FLOOR_GREY_DARK, label="darker shading = episodes over the budget")]
+        fig.legend(handles=keys, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.2), fontsize=7.5,
+                   handlelength=1.4, columnspacing=1.6)
+        fig.text(0.5, -0.045,
+                 "Each panel: the trained policy run for 1000 episodes per seed (3 seeds pooled). "
+                 "Bars = % of episodes at each episode cost, in steps of 5 (budget = 25).\n"
+                 "Numbers above a panel: CRAX default → with floor.\n"
+                 "↑95% = the blue bar for episodes costing 0–5 is cut off: with the floor, 95% of episodes cost between 0 and 5.",
+                 ha="center", va="top", fontsize=6.8, color=INK2, linespacing=1.5)
         save(fig, "fig37_floor_distributions")
 
 
