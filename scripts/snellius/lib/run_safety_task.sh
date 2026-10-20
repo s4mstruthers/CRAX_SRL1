@@ -208,6 +208,23 @@ define_penalty_floor() {
   done
 }
 
+# 16 Baselines for experiment 15, rerun with the current code so that every arm stores the
+#    1000 raw episode costs of its final evaluation (experiments 09-11 kept only summaries for
+#    these arms). Same settings as experiment 15; logged under the same experiment name.
+#    PPO-Lag and FOCOPS with CRAX defaults on both tasks, and P3O with kappa fixed at 20 on Goal
+#    (its Button counterpart, experiment 14, already has the raw costs).
+define_penalty_floor_baselines() {
+  local s
+  for s in 0 1 2; do
+    add_task penalty_floor 20 ppo_lag safe_goal_point 1 2048 $s 3e7 "" "default"
+    add_task penalty_floor 20 focops  safe_goal_point 1 2048 $s 3e7 "" "default"
+    add_task penalty_floor 20 p3o     safe_goal_point 1 2048 $s 3e7 \
+      "--initial_kappa 20 --kappa_increase_factor 1.0 --kappa_decrease_factor 1.0" "fixed-20"
+    add_task penalty_floor 20 ppo_lag safe_button_point 1 2048 $s 5e7 "--episode_length 2000" "T2000-default"
+    add_task penalty_floor 20 focops  safe_button_point 1 2048 $s 5e7 "--episode_length 2000" "T2000-default"
+  done
+}
+
 # ---------------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------------

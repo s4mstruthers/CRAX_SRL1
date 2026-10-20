@@ -1237,12 +1237,18 @@ def floor_arms(runs, alg, env):
     if alg == "p3o":
         default = A.select(runs, experiment="penalty_floor", alg="p3o", env=env,
                            variant="default" if goal else "T2000-default")
-        floored = (A.select(runs, experiment="fixed_baselines", alg="p3o", env=env,
-                            variant="initial_kappa-20-kappa_increase_factor-1.0-kappa_decrease_factor-1.0") if goal
-                   else A.select(runs, experiment="levers_button", alg="p3o", env=env, variant="T2000-fixed_kappa-20"))
+        if goal:   # kappa fixed at 20: experiment 16 (raw costs stored) if present, else experiment 09
+            floored = (A.select(runs, experiment="penalty_floor", alg="p3o", env=env, variant="fixed-20")
+                       or A.select(runs, experiment="fixed_baselines", alg="p3o", env=env,
+                                   variant="initial_kappa-20-kappa_increase_factor-1.0-kappa_decrease_factor-1.0"))
+        else:      # experiment 14
+            floored = A.select(runs, experiment="levers_button", alg="p3o", env=env, variant="T2000-fixed_kappa-20")
     else:
-        default = (A.select(runs, experiment="core_rerun", alg=alg, env=env) if goal
-                   else A.select(runs, experiment="other_tasks", alg=alg, env=env, variant="episode_length-2000"))
+        default = A.select(runs, experiment="penalty_floor", alg=alg, env=env,
+                           variant="default" if goal else "T2000-default")          # experiment 16
+        if not default:                                                              # older baselines
+            default = (A.select(runs, experiment="core_rerun", alg=alg, env=env) if goal
+                       else A.select(runs, experiment="other_tasks", alg=alg, env=env, variant="episode_length-2000"))
         floored = [r for r in A.select(runs, experiment="penalty_floor", alg=alg, env=env) if "floor" in r.variant]
     return default, floored
 
@@ -1253,7 +1259,7 @@ def fig36_penalty_floor(runs):
     Rows: tasks. Open circles: CRAX default; filled: with the penalty floor. Short bars are
     seed means; the label above each algorithm is the floored mean.
     """
-    panels = [("violation_rate", 100, "Over budget, V (%)", "{:.0f}%", (-3, 75), False),
+    panels = [("violation_rate", 100, "Over budget, V (%)", "{:.0f}%", (-3, 103), False),
               ("d_norm_plus", 1, "Overshoot when over, D_norm+ (log)", "{:.2f}", (0.02, 10), True),
               ("reward_mean", 1, "Mean episode reward", "{:.0f}", None, False)]
     fig, axes = plt.subplots(len(FLOOR_TASKS), len(panels), figsize=(13, 6.6),
@@ -1279,6 +1285,88 @@ def fig36_penalty_floor(runs):
     save(fig, "fig36_penalty_floor")
 
 
+FLOOR_GREY, FLOOR_BLUE = "#8a8983", "#2a78d6"     # CRAX default (neutral reference) / with floor
+
+
+def pooled_costs(rs):
+    """All final greedy episode costs of a set of runs, pooled over seeds (empty if not stored)."""
+    costs = [np.asarray(r.final_eval("greedy", "episode_costs") or [], float) for r in rs]
+    costs = [c for c in costs if c.size]
+    return np.concatenate(costs) if costs else np.empty(0)
+
+
+def fig37_floor_distributions(runs, envs=("safe_goal_point", "safe_button_point")):
+    """Where do final-policy episodes land relative to the budget, before and after the floor?
+
+    One panel per algorithm and task. Each curve is the share of the final greedy policy's
+    episodes at each episode cost (pooled over seeds, bins of 2.5). Darker shading right of the
+    dashed budget line = episodes that break the budget. The box gives the two numbers that matter:
+    share over budget (V) and mean reward, default -> floor.
+    """
+    bins = np.arange(0, 100 + 2.5, 2.5)                      # 0 .. 4x budget; costs above go in the last bin
+    centres = bins[:-1]
+    tasks = [(e, n) for e, n in FLOOR_TASKS if e in envs]
+    with plt.rc_context({"font.size": 11}):
+        fig, axes = plt.subplots(len(tasks), len(FLOOR_ALGS), figsize=(14, 3.9 * len(tasks)), squeeze=False,
+                                 gridspec_kw={"hspace": 0.55, "wspace": 0.12})
+        for row, (env, task_name) in zip(axes, tasks):
+            for ax, (alg, name) in zip(row, FLOOR_ALGS):
+                default, floored = floor_arms(runs, alg, env)
+                ymax = 0
+                for rs, color, z in ((default, FLOOR_GREY, 2), (floored, FLOOR_BLUE, 3)):
+                    c = pooled_costs(rs)
+                    if not c.size:
+                        continue
+                    share = 100 * np.histogram(np.clip(c, 0, bins[-1] - 1e-9), bins)[0] / c.size
+                    over = centres >= D                       # bins at or above the budget
+                    # Light fill below budget, full colour above it: the coloured area IS V.
+                    ax.fill_between(centres, share, step="post", color=color, alpha=0.18, lw=0, zorder=z)
+                    ax.fill_between(centres, np.where(over, share, 0), step="post", color=color, alpha=0.85,
+                                    lw=0, zorder=z)
+                    ax.step(centres, share, where="post", color=color, lw=1.6, zorder=z + 0.5)
+                    ymax = max(ymax, share[1:].max() if rs is floored else share.max())
+                # Keep the default's shape readable: a floored spike at cost ~0 is clipped and labelled.
+                top = max(ymax * 1.35, 8)
+                c_floor = pooled_costs(floored)
+                if c_floor.size:
+                    spike = 100 * np.mean(c_floor < bins[1])
+                    if spike > top:
+                        # Short label next to the clipped spike (no arrow across the panel).
+                        ax.text(3.5, top * 0.96, f"▲ {spike:.0f}% of episodes at cost ≈ 0", color=FLOOR_BLUE,
+                                fontsize=9.5, va="top", ha="left", zorder=7,
+                                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.9))
+                ax.set_ylim(0, top)
+                ax.set_xlim(0, 100)
+                ax.axvline(D, color=INK, ls="--", lw=1.2, zorder=5)
+                ax.set_xticks([0, 25, 50, 75, 100])
+                ax.set_xticklabels(["0", "25\nbudget", "50", "75", "≥100"])
+
+                def v_and_reward(rs):
+                    v = final_values(rs, "greedy", "violation_rate", 100)
+                    r = final_values(rs, "greedy", "reward_mean")
+                    return (np.nanmean(v) if len(v) else np.nan), (np.nanmean(r) if len(r) else np.nan)
+                (v0, r0), (v1, r1) = v_and_reward(default), v_and_reward(floored)
+                fmt = lambda x, f: "–" if not np.isfinite(x) else (f"{x:.1f}%" if f.endswith('%') and 0 < x < 1 else f.format(x))
+                ax.text(0.97, 0.80, f"Over budget  {fmt(v0, '{:.0f}%')} → {fmt(v1, '{:.0f}%')}\n"
+                                    f"Reward  {fmt(r0, '{:.0f}')} → {fmt(r1, '{:.0f}')}",
+                        transform=ax.transAxes, ha="right", va="top", fontsize=10.5, color=INK,
+                        bbox=dict(boxstyle="round,pad=0.4", fc="white", ec=AXIS, lw=0.8), zorder=6)
+                ax.set_title(f"{name} · {task_name.split(' (')[0]}", loc="left", fontsize=11.5, color=INK)
+                ax.set_xlabel("Cost of one episode")
+                if ax is row[0]:
+                    ax.set_ylabel("% of episodes")
+                ax.grid(axis="x", visible=False)
+        keys = [plt.Rectangle((0, 0), 1, 1, color=FLOOR_GREY, alpha=0.85, label="CRAX default"),
+                plt.Rectangle((0, 0), 1, 1, color=FLOOR_BLUE, alpha=0.85, label="with penalty floor (budget still 25)")]
+        fig.legend(handles=keys, loc="upper center", ncol=2, frameon=False, fontsize=11,
+                   bbox_to_anchor=(0.5, 1.0 if len(tasks) > 1 else 1.06))
+        fig.text(0.5, -0.02 if len(tasks) > 1 else -0.08,
+                 "Final greedy policy, 1000 episodes per run, seeds pooled. Dark shading = episodes over the budget (V). "
+                 "Floors: PPO-Lag λ ≥ 2 / 8, FOCOPS ν ≥ 2 / 1.5, P3O κ = 20.",
+                 ha="center", fontsize=9, color=INK2)
+        save(fig, "fig37_floor_distributions")
+
+
 PAPER = [
     fig34_mean_vs_share_all_tasks,    # RQ1: V is set by the mean alone, all tasks        (Fig. 1)
     fig17_levels_metrics,             # RQ1: harder levels, the mean holds, the tail grows (Fig. 2)
@@ -1289,6 +1377,7 @@ PAPER = [
     fig24_training_vs_final,          # training-time vs final-policy safety               (Fig. 7)
     fig23_cdfs,                       # Spoor-style CDFs of D_norm                         (Fig. 8)
     fig36_penalty_floor,              # RQ2: one penalty floor, three algorithms (exp. 15)
+    fig37_floor_distributions,        # RQ2: cost distributions before/after the floor (exp. 15/16)
 ]
 # Supporting figures for the two-page reproducibility supplement and for the appendix of
 # the in-depth report (figures/supplement/). Not in the paper's main text.
