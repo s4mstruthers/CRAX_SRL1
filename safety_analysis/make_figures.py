@@ -1,10 +1,15 @@
 """Produce the figures of the training-time safety paper (2AMM20, Oct 2026).
 
 Usage (repo folder, crax env active; needs numpy + matplotlib):
-    python safety_analysis/make_figures.py            # all figures -> figures/paper/ (8) and figures/supplement/ (12)
-    python safety_analysis/make_figures.py --paper    # the 8 main-text figures only
-    python safety_analysis/make_figures.py fig32      # only figures whose name starts with fig32
-    python safety_analysis/make_figures.py --pdf      # also write vector PDFs (for LaTeX)
+    python safety_analysis/make_figures.py --pdf      # every figure, with vector PDFs (use these in LaTeX)
+    python safety_analysis/make_figures.py --paper    # only the figures the paper uses (main text + supplement)
+    python safety_analysis/make_figures.py fig1_      # only figures whose file or function name starts with fig1_ (or e.g. fig34)
+
+Output (safety_analysis/figures/, see figures/INDEX.md for which file is which figure):
+    paper/          fig1_..., fig2_...      the two main-text figures
+    supplement/     figS1_..., figS2_, ...  supplement figures
+    not_in_paper/   figNN_...               figures of the in-depth reports that the paper no longer uses
+    INDEX.md        file -> place in the paper, LaTeX label, what it shows, drawing function
 
 Every figure is built from analysis_lib (loading, cleaning, metrics), the same code
 key_numbers.py uses for the numbers quoted in the reports.
@@ -16,6 +21,9 @@ Conventions used in every plot
   * dots in dot plots = individual seeds, short horizontal bar = mean over seeds;
   * algorithm-comparison plots (figures 3 and 6) stop at 30.2M steps, so that PPO-Saute
     (which trained for 30M steps) is compared over the same window as the others;
+  * paper figures (fig17, fig24, fig34, fig36, fig37) are drawn at their printed width (PRINT_W /
+    COL_W) with 7-8 pt text and carry no notes, footers or long titles: what is plotted, seeds,
+    bin widths etc. go in the LaTeX caption; panels only get short labels like "(a) Mean episode cost";
   * figure numbers (figNN_*.png) are kept from the in-depth reports (30 Sep, 6 Oct); figures
     that are not in the paper were removed (branch paper-trim), so the numbering has gaps.
 """
@@ -61,6 +69,20 @@ plt.rcParams.update({
     "xtick.minor.size": 0, "ytick.minor.size": 0,
     "legend.frameon": False, "figure.dpi": 100, "savefig.dpi": 200, "savefig.bbox": "tight",
 })
+
+# ---- print sizes for the paper (ACM sigconf, two columns) ----
+# The paper's figures are drawn at the exact width they are printed at, so that 7-8 pt text in the
+# figure prints at 7-8 pt next to the 8 pt caption (no rescaling in LaTeX: width=\linewidth).
+# Paper figures carry no explanatory notes, footers or long titles: that text is the job of the
+# LaTeX caption. Panels keep only a short label such as "(a) Mean episode cost".
+PRINT_W = 7.0                     # inches: \textwidth (figure* spanning both columns)
+COL_W = 3.33                      # inches: \columnwidth (figure in one column)
+# savefig crops the empty figure margin ("bbox: tight"), so a figure is created slightly wider than
+# its printed width; these canvas widths make the cropped file come out at ~PRINT_W / ~COL_W.
+CANVAS_W = 7.9                    # -> ~7.0 in after cropping
+CANVAS_COL_W = 3.6                # -> ~3.33 in after cropping
+PRINT_RC = {"font.size": 7.5, "axes.titlesize": 8, "axes.titleweight": "normal", "axes.labelsize": 7.5,
+            "xtick.labelsize": 7, "ytick.labelsize": 7, "legend.fontsize": 7, "savefig.pad_inches": 0.02}
 
 
 # ---------------------------------------------------------------------------------
@@ -234,19 +256,38 @@ def shade_failed_learning(ax, label=True, y_text=0.97, x_text=np.sqrt(4096 * 819
 SAVE_PDF = False                  # set by the --pdf command-line flag
 
 
-OUT_SUB = ""                      # "paper" or "supplement": set by main() per figure
+# Where each figure goes and what its file is called. The figures used in the paper get names
+# that say where they appear (fig1_, fig2_ = main text; figS1_ ... = supplement) and what they
+# show; the internal figNN_ name of the drawing function is kept only in INDEX.md and here.
+# Everything else is written to figures/not_in_paper/ under its old figNN_ name.
+#   internal name                      -> (folder,      file name used in the paper)
+PAPER_FILES = {
+    "fig34_mean_vs_share_all_tasks":   ("paper",      "fig1_violation_rate_vs_mean_cost"),
+    "fig37_floor_distributions":       ("paper",      "fig2_penalty_floor_cost_distributions"),
+    "fig17_levels_metrics":            ("supplement", "figS1_goal_levels_metrics"),
+    "fig24_training_vs_final":         ("supplement", "figS2_training_vs_final_violation_rate"),
+    "fig36_penalty_floor":             ("supplement", "figS3_penalty_floor_summary"),
+}
+OTHER_FOLDER = "not_in_paper"
+
+
+def output_path(name):
+    """(folder, file stem) for the figure whose drawing function saves it as `name`."""
+    return PAPER_FILES.get(name, (OTHER_FOLDER, name))
 
 
 def save(fig, name):
-    """Write the figure to safety_analysis/figures/<paper|supplement>/<name>.png (and .pdf with
-    --pdf), then close it."""
-    folder = os.path.join(OUT, OUT_SUB)
+    """Write the figure as a .png (and a vector .pdf with --pdf) to the folder and file name
+    given by PAPER_FILES (figures/not_in_paper/<name> for figures the paper does not use),
+    then close it."""
+    sub, stem = output_path(name)
+    folder = os.path.join(OUT, sub)
     os.makedirs(folder, exist_ok=True)
-    fig.savefig(os.path.join(folder, name + ".png"))
+    fig.savefig(os.path.join(folder, stem + ".png"))
     if SAVE_PDF:
-        fig.savefig(os.path.join(folder, name + ".pdf"))
+        fig.savefig(os.path.join(folder, stem + ".pdf"))
     plt.close(fig)
-    print(f"  wrote {OUT_SUB}/{name}")
+    print(f"  wrote {sub}/{stem}")
 
 
 # ---------------------------------------------------------------------------------
@@ -467,33 +508,46 @@ def fig13_lr_dose_response(runs):
 # ---------------------------------------------------------------------------------
 
 def fig17_levels_metrics(runs):
-    """Metrics against difficulty level for PPO and the three constrained algorithms."""
-    # (key, title, y-axis label, y limits, log-scale ticks or None)
-    panels = [("avg_cost", "Average training cost per episode", "Cost per episode (log scale)", (10, 200), [10, 25, 50, 100, 200]),
-              ("ep_share_over", "% of training episodes over budget", "% of episodes", (0, 105), None),
-              ("ep_share_over_2x", "% of training episodes over 2× budget", "% of episodes", (0, 105), None),
-              ("ep_final_p99", "Worst 1% of episodes (p99), last quarter", "Episode cost (log scale)", (20, 1000), [25, 50, 100, 200, 500, 1000]),
-              ("reward_final", "Episode reward, last 10 updates", "Reward per episode", (0, 42), None),
-              ("pct_over_10pct", "% of policy updates with mean cost >10% over budget", "% of updates", (0, 105), None)]
-    fig, axes = plt.subplots(2, 3, figsize=(12.6, 6.8), gridspec_kw={"hspace": 0.38, "wspace": 0.32})
-    for ax, (key, title, ylabel, ylim, log_ticks) in zip(axes.flat, panels):
-        for alg in ["ppo"] + LEVEL_ALGS:
-            trend_dots(ax, [1, 2, 3], [metric_values(level_runs(runs, alg, lv), key) for lv in [1, 2, 3]], ALG_COLOR[alg], label=LABEL[alg])
-        if log_ticks:
-            ax.set_yscale("log")
-            plain_log_ticks(ax, log_ticks)
-        ax.set_ylim(*ylim)
-        ax.set_xticks([1, 2, 3])
-        ax.set_xticklabels(["Level 1", "Level 2", "Level 3"])
-        ax.set_xlim(0.75, 3.25)                     # margin so the edge labels are not clipped
-        ax.set_title(title, loc="left", color=INK, fontsize=9.5)
-        ax.set_ylabel(ylabel)
-        if key in ("avg_cost", "ep_final_p99"):
-            budget_line(ax, label=False)
-    # One shared legend in a row above the panels, so it never covers any data.
-    handles, _ = axes[0, 0].get_legend_handles_labels()
-    legend_above(fig, handles + [seed_key(), line_key(INK, "budget (25)", lw=1.0, ls="--")], top=0.9)
-    save(fig, "fig17_levels_metrics")
+    """Metrics against difficulty level for PPO and the three constrained algorithms.
+
+    Training-time data. Panel labels are short ("(a) Mean episode cost"); which part of training
+    each metric covers (whole run, last quarter, last 10 updates) is stated in the paper's caption.
+    """
+    # (key, short panel label, y-axis unit, y limits, log-scale ticks or None)
+    panels = [("avg_cost", "(a) Mean episode cost", "Cost", (10, 200), [10, 25, 50, 100, 200]),
+              ("ep_share_over", "(b) Episodes over budget", "%", (0, 105), None),
+              ("ep_share_over_2x", "(c) Episodes over 2× budget", "%", (0, 105), None),
+              ("ep_final_p99", "(d) Worst 1% of episodes (p99)", "Cost", (20, 1000), [25, 50, 100, 200, 500, 1000]),
+              ("reward_final", "(e) Episode reward", "Reward", (0, 42), None),
+              ("pct_over_10pct", "(f) Updates with mean > 1.1× budget", "%", (0, 105), None)]
+    with plt.rc_context(PRINT_RC):
+        fig, axes = plt.subplots(2, 3, figsize=(CANVAS_W - 0.45, 3.5), gridspec_kw={"hspace": 0.45, "wspace": 0.3})
+        for ax, (key, title, ylabel, ylim, log_ticks) in zip(axes.flat, panels):
+            for alg in ["ppo"] + LEVEL_ALGS:
+                means = []
+                for lv in [1, 2, 3]:
+                    vals = np.array([v for v in metric_values(level_runs(runs, alg, lv), key) if np.isfinite(v)])
+                    ax.scatter(np.full(len(vals), lv), vals, s=7, color=ALG_COLOR[alg], alpha=0.5, lw=0, zorder=3)
+                    means.append(vals.mean() if len(vals) else np.nan)
+                ax.plot([1, 2, 3], means, color=ALG_COLOR[alg], lw=1.3, marker="o", ms=3, zorder=4,
+                        label=LABEL[alg].replace(" (no constraint)", ""))
+            if log_ticks:
+                ax.set_yscale("log")
+                plain_log_ticks(ax, log_ticks)
+            ax.set_ylim(*ylim)
+            ax.set_xticks([1, 2, 3])
+            ax.set_xticklabels(["Level 1", "Level 2", "Level 3"])
+            ax.set_xlim(0.8, 3.2)                       # margin so the edge labels are not clipped
+            ax.set_title(title, loc="left", color=INK, pad=3)
+            ax.set_ylabel(ylabel)
+            ax.grid(axis="x", visible=False)
+            if key in ("avg_cost", "ep_final_p99"):
+                ax.axhline(D, color=INK, lw=0.8, ls="--", zorder=2)
+        # One shared legend in a row above the panels, so it never covers any data.
+        handles, _ = axes[0, 0].get_legend_handles_labels()
+        fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 0.94), ncol=len(handles),
+                   handlelength=1.8, columnspacing=1.8, frameon=False)
+        save(fig, "fig17_levels_metrics")
 
 
 # ---------------------------------------------------------------------------------
@@ -766,37 +820,42 @@ def fig23_cdfs(runs):
 def fig24_training_vs_final(runs):
     """Training-time vs final-policy safety, per run: share of training episodes over budget
     vs share of final greedy episodes over budget. Points on the diagonal: training predicts
-    the deployed policy; below it: the final policy is safer than training suggested."""
-    fig, ax = plt.subplots(figsize=(8.6, 5.6))
-    ax.plot([0, 100], [0, 100], color=AXIS, lw=1, zorder=1)
-    ax.text(97, 92, "same share during training\nand for the final policy", fontsize=7.8, color=INK2, ha="right", va="top")
-    handles = []
-    for m in GOAL_METHODS:
-        rs = m.runs(runs)
-        x = [A.run_metrics(r, max_step_m=CMP_MAX)["ep_share_over"] for r in rs]
-        y = final_values(rs, "greedy", "violation_rate", 100)
-        ax.scatter(x, y, s=34, marker="o", color=m.color, edgecolor="white", linewidth=0.6, zorder=3)
-        handles.append(plt.Line2D([], [], ls="", marker="o", color=m.color, label=m.label))
-    task_marker = {"safe_circle_point": "s", "safe_push_point": "^", "safe_button_point": "D"}
-    for env, name in TASKS:
-        for alg in TASK_ALGS:
-            rs = task_runs(runs, alg, env)
-            x = [A.run_metrics(r)["ep_share_over"] for r in rs]
+    the deployed policy; below it: the final policy is safer than training suggested.
+    (The diagonal is described in the paper's caption, not labelled in the figure.)"""
+    with plt.rc_context(PRINT_RC):
+        fig, ax = plt.subplots(figsize=(PRINT_W * 0.66, 2.9))
+        ax.plot([0, 100], [0, 100], color=AXIS, lw=0.9, zorder=1)
+        handles = []
+        for m in GOAL_METHODS:
+            rs = m.runs(runs)
+            x = [A.run_metrics(r, max_step_m=CMP_MAX)["ep_share_over"] for r in rs]
             y = final_values(rs, "greedy", "violation_rate", 100)
-            ax.scatter(x, y, s=30, marker=task_marker[env], color=ALG_COLOR[alg], edgecolor=INK, linewidth=0.4, zorder=3)
-    leg = ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8,
-                    title="Goal Point L1 (circles)", title_fontsize=8.3, alignment="left")
-    ax.add_artist(leg)
-    leg.set_clip_on(False)
-    shape_handles = [plt.Line2D([], [], ls="", marker=task_marker[e], color=INK2, markeredgecolor=INK, label=n)
-                     for e, n in TASKS]
-    ax.legend(handles=shape_handles, loc="upper left", bbox_to_anchor=(1.02, 0.18), fontsize=8,
-              title="Other tasks (colour = algorithm)", title_fontsize=8.3, alignment="left")
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, 102)
-    ax.set_xlabel("% of training episodes over budget (whole run)")
-    ax.set_ylabel("% of final greedy episodes over budget (V)")
-    save(fig, "fig24_training_vs_final")
+            ax.scatter(x, y, s=14, marker="o", color=m.color, edgecolor="white", linewidth=0.35, zorder=3)
+            handles.append(plt.Line2D([], [], ls="", marker="o", ms=3.8, color=m.color,
+                                      label=m.label.replace(" (no constraint)", "").replace(" (Stooke)", "")))
+        task_marker = {"safe_circle_point": "s", "safe_push_point": "^", "safe_button_point": "D"}
+        for env, name in TASKS:
+            for alg in TASK_ALGS:
+                rs = task_runs(runs, alg, env)
+                x = [A.run_metrics(r)["ep_share_over"] for r in rs]
+                y = final_values(rs, "greedy", "violation_rate", 100)
+                ax.scatter(x, y, s=13, marker=task_marker[env], color=ALG_COLOR[alg], edgecolor=INK,
+                           linewidth=0.3, zorder=3)
+        kw = dict(fontsize=6.5, title_fontsize=6.5, alignment="left", handletextpad=0.2, labelspacing=0.25,
+                  handlelength=1.0, loc="upper left")
+        leg = ax.legend(handles=handles, bbox_to_anchor=(1.02, 1.02), title="Goal, Level 1 (circles)", **kw)
+        ax.add_artist(leg)
+        leg.set_clip_on(False)          # a legend added with add_artist is otherwise clipped to the axes
+        shape_handles = [plt.Line2D([], [], ls="", marker=task_marker[e], ms=3.8, color=INK2, markeredgecolor=INK,
+                                    mew=0.3, label=n) for e, n in TASKS]
+        ax.legend(handles=shape_handles, bbox_to_anchor=(1.02, 0.2), title="Other tasks", **kw)
+        ax.set_xlim(-2, 102)
+        ax.set_ylim(-2, 102)
+        ax.set_xticks(range(0, 101, 20))
+        ax.set_yticks(range(0, 101, 20))
+        ax.set_xlabel("Training episodes over budget (%)")
+        ax.set_ylabel("Final-policy episodes over budget (%)")
+        save(fig, "fig24_training_vs_final")
 
 
 def _fixed_groups(runs):
@@ -1125,40 +1184,42 @@ def fig34_mean_vs_share_all_tasks(runs):
         if np.isfinite(m["ep_final_mean"]) and np.isfinite(m["ep_final_share_over"]):
             rows.append((r.env, r.alg, m["ep_final_mean"] / D, m["ep_final_share_over"]))
 
-    fig, ax = plt.subplots(figsize=(7.8, 5.0))
-    for env, alg, x, y in rows:
-        mk = ALG_MARKER.get(alg, "o")
-        edge = {} if mk == "x" else dict(edgecolor="white", linewidth=0.5)   # 'x' has no face to edge
-        ax.scatter(x, y, s=30, color=TASK_COLOR.get(env, INK2), marker=mk, zorder=3, **edge)
-    ax.axvline(1.0, color=INK, lw=1, ls="--")
-    ax.axhline(50, color=AXIS, lw=0.8)
-    ax.text(0.97, 101, "mean = budget", fontsize=8, color=INK, ha="right", va="top")
-    ax.text(0.31, 51.5, "half the episodes", fontsize=7.5, color=INK2, ha="left", va="bottom")
-    ax.set_xscale("log")
-    ax.set_xlim(0.3, 8)
-    ax.xaxis.set_major_locator(matplotlib.ticker.FixedLocator([0.5, 1, 2, 4, 8]))
-    ax.xaxis.set_major_formatter(matplotlib.ticker.FixedFormatter(["0.5×", "1×", "2×", "4×", "8×"]))
-    ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
-    ax.set_yticks(range(0, 101, 20))
-    ax.set_yticklabels([str(t) for t in range(0, 101, 20)])
-    ax.set_ylim(0, 105)
-    ax.set_xlabel(f"Mean episode cost of the run, as a multiple of the budget ({D:g}); final quarter, log scale")
-    ax.set_ylabel(f"% of the run's episodes with cost over the budget ({D:g})")
-    task_h = [plt.Line2D([], [], ls="", marker="o", color=c, label=TASK_NAME[e]) for e, c in TASK_COLOR.items()]
-    alg_h = [plt.Line2D([], [], ls="", marker=mk, color=INK2, label=LABEL.get(a, a)) for a, mk in ALG_MARKER.items()]
-    leg = ax.legend(handles=task_h, loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8.5,
-                    title="Colour: task", title_fontsize=8.5, alignment="left")
-    ax.add_artist(leg)
-    leg.set_clip_on(False)
-    ax.legend(handles=alg_h, loc="upper left", bbox_to_anchor=(1.02, 0.6), fontsize=8.5,
-              title="Marker: algorithm", title_fontsize=8.5, alignment="left")
+    # Single-column figure (Fig. 1 of the paper). The two legends sit in the two empty corners of
+    # the plot (top left, bottom right), so no space is spent outside the axes.
+    with plt.rc_context(PRINT_RC):
+        fig, ax = plt.subplots(figsize=(CANVAS_COL_W, 2.75))
+        for env, alg, x, y in rows:
+            mk = ALG_MARKER.get(alg, "o")
+            # 'x' has no face, so it gets a thicker line instead of a white edge
+            edge = dict(linewidth=0.9) if mk == "x" else dict(edgecolor="white", linewidth=0.35)
+            ax.scatter(x, y, s=13, color=TASK_COLOR.get(env, INK2), marker=mk, zorder=3, **edge)
+        ax.axvline(1.0, color=INK, lw=0.9, ls="--", zorder=2)          # mean = budget (explained in the caption)
+        ax.axhline(50, color=AXIS, lw=0.7, zorder=1)                    # half of the episodes
+        ax.set_xscale("log")
+        ax.set_xlim(0.25, 8)
+        ax.xaxis.set_major_locator(matplotlib.ticker.FixedLocator([0.25, 0.5, 1, 2, 4, 8]))
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FixedFormatter(["0.25", "0.5", "1", "2", "4", "8"]))
+        ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+        ax.set_yticks(range(0, 101, 20))
+        ax.set_ylim(0, 104)
+        ax.set_xlabel("Mean episode cost / budget")
+        ax.set_ylabel("Episodes over budget (%)")
+        task_h = [plt.Line2D([], [], ls="", marker="o", ms=3.8, color=c, label=TASK_NAME[e].replace(" Point (L1-3)", ""))
+                  for e, c in TASK_COLOR.items()]
+        alg_h = [plt.Line2D([], [], ls="", marker=mk, ms=3.8, color=INK2, mew=0.9 if mk == "x" else 0.5,
+                            label=LABEL.get(a, a).replace(" (no constraint)", "")) for a, mk in ALG_MARKER.items()]
+        kw = dict(fontsize=6.5, title_fontsize=6.5, alignment="left", handletextpad=0.2, borderaxespad=0.3,
+                  labelspacing=0.25, handlelength=1.0)
+        leg = ax.legend(handles=task_h, loc="upper left", title="Task", **kw)
+        ax.add_artist(leg)
+        ax.legend(handles=alg_h, loc="lower right", ncol=2, columnspacing=0.6, title="Algorithm", **kw)
+        save(fig, "fig34_mean_vs_share_all_tasks")
 
     print("fig34: runs with mean within 5% of the budget -> % of episodes over budget")
     for env in TASK_COLOR:
         v = [y for e, _, x, y in rows if e == env and abs(x - 1.0) <= 0.05]
         if v:
             print(f"  {TASK_NAME[env]:18s} n={len(v):2d}  {min(v):4.0f}-{max(v):3.0f}%  (mean {np.mean(v):.0f}%)")
-    save(fig, "fig34_mean_vs_share_all_tasks")
 
 
 # The paper's main figures, in the order the paper uses them (figures/paper/).
@@ -1258,7 +1319,6 @@ FLOOR_GREY, FLOOR_GREY_DARK, FLOOR_BLUE = "#a3a29c", "#6b6a64", "#2a78d6"   # CR
 FLOOR_SETTINGS = {"ppo_lag": "default: λ adapts, starts at 0\nfloor: λ ≥ 2 (Goal), λ ≥ 8 (Button)",
                   "focops": "default: ν adapts, starts at 0.1\nfloor: ν ≥ 2 (Goal), ν ≥ 1.5 (Button)",
                   "p3o": "default: κ ramps up from 0.01\nfloor: κ fixed at 20 (both tasks)"}
-PRINT_W = 7.0                       # inches: full text width of the two-column ACM layout, so text prints at true size
 
 
 def pooled_costs(rs):
@@ -1288,8 +1348,8 @@ def fig36_penalty_floor(runs):
     dot = with the floor; seed means (3 seeds), final greedy policy, 1000 episodes per run.
     """
     rows = [(alg, name, env, task.split(",")[0]) for alg, name in FLOOR_ALGS for env, task in FLOOR_TASKS]
-    with plt.rc_context({"font.size": 8, "axes.titlesize": 8.5}):
-        fig, (ax_v, ax_r) = plt.subplots(1, 2, figsize=(PRINT_W, 2.7), sharey=True,
+    with plt.rc_context(PRINT_RC):
+        fig, (ax_v, ax_r) = plt.subplots(1, 2, figsize=(CANVAS_W - 0.2, 2.4), sharey=True,
                                          gridspec_kw={"wspace": 0.08, "width_ratios": [1, 1]})
         ys = np.arange(len(rows))[::-1]
         for y, (alg, name, env, task) in zip(ys, rows):
@@ -1314,17 +1374,17 @@ def fig36_penalty_floor(runs):
                 ax.axhline(y - 0.5, color=GRID, lw=0.8, zorder=0)
         ax_v.set_xlim(-4, 80)
         ax_v.set_xlabel("Episodes over budget (%)")
-        ax_v.set_title("Episodes over budget (lower = safer)", loc="left")
+        ax_v.set_title("(a) Episodes over budget", loc="left", color=INK, pad=3)
         ax_r.set_xlim(-8, 125)
         ax_r.axvline(100, color=INK2, ls=":", lw=1, zorder=0)
-        ax_r.set_xlabel("Reward with floor, % of default reward")
-        ax_r.set_title("Reward kept (100% = no loss)", loc="left")
+        ax_r.set_xlabel("Reward, % of CRAX default")
+        ax_r.set_title("(b) Reward relative to CRAX default", loc="left", color=INK, pad=3)
         for ax in (ax_v, ax_r):
             ax.grid(axis="y", visible=False)
             ax.set_ylim(-0.6, len(rows) - 0.4)
         keys = [plt.Line2D([], [], ls="", marker="o", ms=5.5, color=FLOOR_GREY_DARK, label="CRAX default"),
-                plt.Line2D([], [], ls="", marker="o", ms=5.5, color=FLOOR_BLUE, label="with penalty floor (budget unchanged)")]
-        fig.legend(handles=keys, loc="upper center", ncol=2, bbox_to_anchor=(0.55, 1.07), fontsize=8)
+                plt.Line2D([], [], ls="", marker="o", ms=5.5, color=FLOOR_BLUE, label="Penalty floor")]
+        fig.legend(handles=keys, loc="lower center", ncol=2, bbox_to_anchor=(0.55, 0.96), fontsize=7)
         save(fig, "fig36_penalty_floor")
 
 
@@ -1333,14 +1393,16 @@ def fig37_floor_distributions(runs, envs=("safe_goal_point", "safe_button_point"
 
     Columns: algorithms; rows: tasks. Each outline is the share of the final greedy policy's
     episodes at each episode cost (seeds pooled, bins of 5). Shading right of the dashed budget
-    line = episodes that break the budget. The box gives the two headline numbers, default -> floor.
+    line = episodes that break the budget. The two numbers in each panel's top-right corner are
+    V (CRAX default -> floor) and the change in mean reward. Everything else (what the floor is
+    per algorithm, bin width, seeds, the clipped first bar) is explained in the paper's caption.
     """
     bins = np.arange(0, 100 + 5, 5)                          # 0 .. 4x budget; costs above 100 go in the last bin
     left = bins[:-1]
     tasks = [(e, n.split(",")[0]) for e, n in FLOOR_TASKS if e in envs]
-    with plt.rc_context({"font.size": 7.5, "axes.titlesize": 8.5, "xtick.labelsize": 7, "ytick.labelsize": 7}):
-        fig, axes = plt.subplots(len(tasks), len(FLOOR_ALGS), figsize=(PRINT_W, 2.1 * len(tasks) + 0.5),
-                                 squeeze=False, gridspec_kw={"hspace": 0.62, "wspace": 0.22})
+    with plt.rc_context(PRINT_RC):
+        fig, axes = plt.subplots(len(tasks), len(FLOOR_ALGS), figsize=(CANVAS_W, 1.45 * len(tasks) + 0.35),
+                                 squeeze=False, gridspec_kw={"hspace": 0.32, "wspace": 0.22})
         for i, (row, (env, task_name)) in enumerate(zip(axes, tasks)):
             for j, (ax, (alg, name)) in enumerate(zip(row, FLOOR_ALGS)):
                 default, floored = floor_arms(runs, alg, env)
@@ -1356,71 +1418,63 @@ def fig37_floor_distributions(runs, envs=("safe_goal_point", "safe_button_point"
                     ax.fill_between(left, s, step="post", color=FLOOR_GREY, alpha=0.35, lw=0, zorder=1)
                     ax.fill_between(left, np.where(over, s, 0), step="post", color=FLOOR_GREY_DARK, alpha=0.9,
                                     lw=0, zorder=2)
-                    ax.step(left, s, where="post", color=FLOOR_GREY_DARK, lw=0.9, zorder=2.5)
+                    ax.step(left, s, where="post", color=FLOOR_GREY_DARK, lw=0.8, zorder=2.5)
                 # Floor: blue outline, solid blue where it is over budget.
                 if "floor" in shares:
                     s = shares["floor"]
                     ax.fill_between(left, s, step="post", color=FLOOR_BLUE, alpha=0.12, lw=0, zorder=3)
                     ax.fill_between(left, np.where(over, s, 0), step="post", color=FLOOR_BLUE, alpha=0.85,
                                     lw=0, zorder=3.5)
-                    ax.step(left, s, where="post", color=FLOOR_BLUE, lw=1.3, zorder=4)
-                # y-range: fit the default's shape; a taller floor spike at cost ~0 is clipped and labelled.
+                    ax.step(left, s, where="post", color=FLOOR_BLUE, lw=1.1, zorder=4)
+                # y-range: fit the default's shape; a taller floor spike at cost ~0 is clipped and its
+                # height written next to it (the caption explains the arrow).
                 peak_default = shares["default"].max() if "default" in shares else 0
                 peak_floor_rest = shares["floor"][1:].max() if "floor" in shares else 0
-                top = max(peak_default, peak_floor_rest, 8) * 1.3
+                top = max(peak_default, peak_floor_rest, 8) * 1.25
                 if "floor" in shares and shares["floor"][0] > top:
-                    # Label the clipped bar in the empty top-right corner, on a white background.
-                    ax.text(6, top * 0.97, f"↑{shares['floor'][0]:.0f}%", color=FLOOR_BLUE, fontsize=7,
+                    ax.text(6, top * 0.97, f"↑{shares['floor'][0]:.0f}%", color=FLOOR_BLUE, fontsize=6.5,
                             va="top", ha="left", zorder=8)
                 ax.set_ylim(0, top)
                 ax.set_xlim(0, 100)
                 ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(3, integer=True))
-                ax.axvline(D, color=INK, ls="--", lw=0.9, zorder=5)
+                ax.axvline(D, color=INK, ls="--", lw=0.8, zorder=5)
                 ax.set_xticks([0, 25, 50, 75, 100])
-                ax.set_xticklabels(["0", "25\nbudget", "50", "75", "100+"])
+                ax.set_xticklabels(["0", "25", "50", "75", "100+"])
+                # Headline numbers, top-right corner (empty in every panel): V default -> floor, reward change.
                 (v0, r0), (v1, r1) = arm_means(default), arm_means(floored)
-                change = f" ({100 * (r1 - r0) / r0:+.0f}%)" if np.isfinite(r1) and r0 else ""
-                ax.set_title(f"over budget: {pct(v0)} → {pct(v1)}\nreward: {change.strip(' ()')} vs default",
-                             loc="center", fontsize=7, fontweight="normal", color=INK, pad=4, linespacing=1.3)
-                if i == 0:      # algorithm name and its settings as a column header, above the numbers
-                    ax.text(0.5, 1.56, name, transform=ax.transAxes, ha="center", va="bottom",
-                            fontsize=9, fontweight="bold", color=INK)
-                    ax.text(0.5, 1.3, FLOOR_SETTINGS[alg], transform=ax.transAxes, ha="center", va="bottom",
-                            fontsize=6.5, color=INK2, linespacing=1.35)
+                change = f"{100 * (r1 - r0) / r0:+.0f}%".replace("-", "\u2212") if np.isfinite(r1) and r0 else "–"
+                ax.text(0.98, 0.95, f"V: {pct(v0)} → {pct(v1)}\nreward: {change}", transform=ax.transAxes,
+                        ha="right", va="top", fontsize=6.5, color=INK, linespacing=1.35, zorder=8)
+                if i == 0:
+                    ax.set_title(name, fontsize=8, color=INK, pad=3)
                 if j == 0:
-                    ax.set_ylabel(f"{task_name} task\n% of episodes", color=INK)
+                    ax.set_ylabel(f"{task_name}\nepisodes (%)", color=INK2)
                 if i == len(tasks) - 1:
-                    ax.set_xlabel("Cost of one episode")
+                    ax.set_xlabel("Episode cost")
                 ax.grid(axis="x", visible=False)
-        keys = [matplotlib.patches.Patch(color=FLOOR_GREY, alpha=0.6, label="CRAX default"),
-                matplotlib.patches.Patch(color=FLOOR_BLUE, alpha=0.5, label="with penalty floor (budget unchanged)"),
-                matplotlib.patches.Patch(color=FLOOR_GREY_DARK, label="darker shading = episodes over the budget")]
-        fig.legend(handles=keys, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.2), fontsize=7.5,
-                   handlelength=1.4, columnspacing=1.6)
-        fig.text(0.5, -0.045,
-                 "Each panel: the trained policy run for 1000 episodes per seed (3 seeds pooled). "
-                 "Bars = % of episodes at each episode cost, in steps of 5 (budget = 25).\n"
-                 "Numbers above a panel: CRAX default → with floor.\n"
-                 "↑95% = the blue bar for episodes costing 0–5 is cut off: with the floor, 95% of episodes cost between 0 and 5.",
-                 ha="center", va="top", fontsize=6.8, color=INK2, linespacing=1.5)
+        keys = [matplotlib.patches.Patch(facecolor=FLOOR_GREY, alpha=0.6, edgecolor=FLOOR_GREY_DARK, label="CRAX default"),
+                matplotlib.patches.Patch(facecolor="#c9dcf4", edgecolor=FLOOR_BLUE, label="Penalty floor")]
+        fig.legend(handles=keys, loc="lower center", ncol=2, bbox_to_anchor=(0.5, 0.955), fontsize=7,
+                   handlelength=1.4, columnspacing=1.8, frameon=False)
         save(fig, "fig37_floor_distributions")
 
 
+# The figures the paper uses (Paper Plan, 20 Oct), in the order they appear. PAPER_FILES above
+# gives their folders and file names.
 PAPER = [
-    fig34_mean_vs_share_all_tasks,    # RQ1: V is set by the mean alone, all tasks        (Fig. 1)
-    fig17_levels_metrics,             # RQ1: harder levels, the mean holds, the tail grows (Fig. 2)
-    fig03_algos_cost_curves,          # training-time cost per update, seven algorithms    (Fig. 3)
-    fig22_final_eval_goal,            # RQ2: final policy per lever on Goal L1             (Fig. 4)
-    fig32_tradeoff_final,             # RQ2: reward vs V per task, incl. Button levers     (Fig. 5)
-    fig26_fixed_baselines,            # RQ2: cost and reward curves of the levers          (Fig. 6)
-    fig24_training_vs_final,          # training-time vs final-policy safety               (Fig. 7)
-    fig23_cdfs,                       # Spoor-style CDFs of D_norm                         (Fig. 8)
-    fig36_penalty_floor,              # RQ2: one penalty floor, three algorithms (exp. 15)
-    fig37_floor_distributions,        # RQ2: cost distributions before/after the floor (exp. 15/16)
+    fig34_mean_vs_share_all_tasks,    # Fig. 1  (RQ1) V is set by the mean, every run of every task
+    fig37_floor_distributions,        # Fig. 2  (RQ2) episode-cost distributions, default vs penalty floor
 ]
-# Supporting figures for the two-page reproducibility supplement and for the appendix of
-# the in-depth report (figures/supplement/). Not in the paper's main text.
 SUPPLEMENT = [
+    fig17_levels_metrics,             # Fig. S1 (RQ1) Goal Levels 1-3: mean flat, worst 1% grows (backs Table 1)
+    fig24_training_vs_final,          # Fig. S2 training-time vs final-policy V (justifies training data for RQ1)
+    fig36_penalty_floor,              # Fig. S3 (RQ2) one-glance summary of Fig. 2 (optional)
+]
+# Figures from the in-depth reports (30 Sep, 6 Oct, 11 Oct) that the paper no longer uses.
+# Kept so the reports can be regenerated; written to figures/not_in_paper/.
+NOT_IN_PAPER = [
+    fig03_algos_cost_curves, fig22_final_eval_goal, fig32_tradeoff_final, fig26_fixed_baselines,
+    fig23_cdfs,                                                               # dropped from the paper, 20 Oct
     fig01_measurement_mean_vs_tail, fig02_lockstep, fig33_reproducibility,   # measurement
     fig18_ant_curves, fig19_ant_metrics,                                      # RQ1 detail
     fig13_lr_dose_response, fig27_fixed_penalties,                           # RQ2 detail
@@ -1433,29 +1487,68 @@ SUPPLEMENT = [
 FIRST_REPORT = [fig01_measurement_mean_vs_tail, fig02_lockstep, fig03_algos_cost_curves,
                 fig13_lr_dose_response,
                 fig17_levels_metrics, fig18_ant_curves, fig19_ant_metrics]
-FIGURES = PAPER + SUPPLEMENT
+FIGURES = PAPER + SUPPLEMENT + NOT_IN_PAPER
+
+# One line per paper figure for figures/INDEX.md: what it shows and the LaTeX label it uses.
+INDEX_ROWS = [
+    ("paper/fig1_violation_rate_vs_mean_cost", "Fig. 1, Results RQ1", "fig:mean_vs_share_all_tasks",
+     "Every run: mean episode cost / budget vs % of episodes over budget. One S-shaped band."),
+    ("paper/fig2_penalty_floor_cost_distributions", "Fig. 2, Results RQ2", "fig:penalty_floor",
+     "Final-policy episode-cost histograms, CRAX default vs penalty floor; PPO-Lag, FOCOPS, P3O on Goal and Button."),
+    ("supplement/figS1_goal_levels_metrics", "Supplement (backs Table 1)", "fig:levels_metrics",
+     "Goal Levels 1-3 for PPO, PPO-Lag, PPO-PID, CRPO: mean, V, >2x budget, p99, reward, updates over budget."),
+    ("supplement/figS2_training_vs_final_violation_rate", "Supplement (Method: why RQ1 uses training data)",
+     "fig:training_vs_final", "Per run: % of training episodes over budget vs V of the final greedy policy."),
+    ("supplement/figS3_penalty_floor_summary", "Supplement, optional (summary of Fig. 2)", "fig:penalty_floor_summary",
+     "V and reward kept, CRAX default vs penalty floor, per algorithm and task."),
+    ("illustration/intro_same_mean_different_risk", "Introduction, optional (illustrations.py)",
+     "fig:same_mean_different_risk", "Three made-up cost distributions with the same mean = budget; not our data."),
+]
+
+
+def write_index():
+    """Write figures/INDEX.md: which file is which figure in the paper, and where the rest are."""
+    internal = {v[0] + "/" + v[1]: k for k, v in PAPER_FILES.items()}
+    lines = ["# Figures: which file is which",
+             "",
+             "Written by make_figures.py. Paper figures are named after where they appear "
+             "(fig1_ / fig2_ = main text, figS1_ ... = supplement). Each has a .png and, with --pdf, "
+             "a vector .pdf (use the .pdf in LaTeX). Ready-made LaTeX blocks with captions: "
+             "SRL_1/figure_blocks.tex.",
+             "",
+             "| File | Where in the paper | LaTeX label | What it shows | Drawn by |",
+             "|---|---|---|---|---|"]
+    for path, where, label, what in INDEX_ROWS:
+        drawn_by = internal.get(path, "illustrations.py")
+        lines.append(f"| `{path}` | {where} | `{label}` | {what} | `{drawn_by}` |")
+    lines += ["",
+              f"`{OTHER_FOLDER}/` holds the figures of the in-depth reports that the paper no longer uses, "
+              "under their old figNN_ names (see the table in safety_analysis/README.md).",
+              ""]
+    os.makedirs(OUT, exist_ok=True)
+    with open(os.path.join(OUT, "INDEX.md"), "w") as fh:
+        fh.write("\n".join(lines))
+    print("  wrote INDEX.md")
 
 
 def remove_old_figures():
-    """Delete figNN_*.png/.pdf files that no current figure writes (left by older versions).
+    """Delete .png/.pdf files in figures/ that no current figure writes (left by older versions
+    of this script, e.g. paper/fig34_... before the paper figures were renamed fig1_ ...).
 
-    Figure numbers shifted when figures were added, so an old fig05_... would otherwise sit
-    next to the new fig05_... and could be mistaken for it.
+    Only files this script could have written are touched: figNN_*, fig1_/fig2_/figS*_ names.
     """
     if not os.path.isdir(OUT):
         return
-    expected = {f.__name__: "paper" for f in PAPER}
-    expected.update({f.__name__: "supplement" for f in SUPPLEMENT})
-    for sub in ("", "paper", "supplement"):          # "" = the flat layout used before 11 Oct
+    expected = {output_path(n) for n in _saved_names()}
+    for sub in ("", "paper", "supplement", OTHER_FOLDER):     # "" = the flat layout used before 11 Oct
         folder = os.path.join(OUT, sub)
         if not os.path.isdir(folder):
             continue
         for fname in sorted(os.listdir(folder)):
             stem, ext = os.path.splitext(fname)
-            if ext not in (".png", ".pdf") or stem[:3] != "fig" or not stem[3:5].isdigit():
+            ours = stem.startswith("fig") and (stem[3:5].isdigit() or stem[3:5] in ("1_", "2_") or stem[3:4] == "S")
+            if ext not in (".png", ".pdf") or not ours or (sub, stem) in expected:
                 continue
-            if expected.get(stem) == sub:
-                continue                               # current figure in its current folder
             try:
                 os.remove(os.path.join(folder, fname))
                 print("  removed old figure", os.path.join(sub, fname))
@@ -1463,22 +1556,27 @@ def remove_old_figures():
                 print(f"  could not remove old figure {fname}: {err}")
 
 
+def _saved_names():
+    """The name each drawing function passes to save(): its own function name."""
+    return [f.__name__ for f in FIGURES]
+
+
 def main():
-    global SAVE_PDF, OUT_SUB
+    global SAVE_PDF
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     SAVE_PDF = "--pdf" in flags
     only = args[0] if args else ""
-    todo = PAPER if "--paper" in flags else FIGURES
+    todo = PAPER + SUPPLEMENT if "--paper" in flags else FIGURES
     runs = A.load_runs()
     print(f"Loaded {len(runs)} runs from {A.EXPORTS}")
     if not only and "--paper" not in flags:
         remove_old_figures()
+    write_index()
     made = 0
     first_report = set(FIRST_REPORT)
     for f in todo:
-        if f.__name__.startswith(only):
-            OUT_SUB = "paper" if f in PAPER else "supplement"
+        if f.__name__.startswith(only) or output_path(f.__name__)[1].startswith(only):
             f(A.batch1(runs) if f in first_report else runs)
             made += 1
     if made == 0:

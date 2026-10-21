@@ -8,8 +8,8 @@ Everything here runs on a laptop; it only reads the exported CSV files.
 | `download_wandb.py` | Exports every run in wandb groups starting with `safety` to `wandb_exports/<group>/<run>.csv` (one row per logged wandb row), plus `<run>.summary.json` (the final-policy evaluation) and, for runs from 6 Oct on, `<run>.final_eval_episodes.npz` (raw per-episode final-evaluation costs and rewards). Files that already exist are skipped. |
 | `summarise_runs.py` | Quick one-line-per-run summary (standard library only) written to `run_summary.csv`. |
 | `analysis_lib.py` | Shared loading, cleaning and metric definitions. The figures and the quoted numbers both use it, so they cannot disagree. |
-| `make_figures.py` | Draws the paper's 8 main figures to `figures/paper/` and 12 supporting figures to `figures/supplement/` (`--paper` for the main set only, `--pdf` also writes vector PDFs). The `PAPER` and `SUPPLEMENT` lists at the bottom of the file are the single source of what exists; `git show main:safety_analysis/make_figures.py` has the figures removed on 11 Oct (and fig06, fig16, fig25, removed on 12 Oct). |
-| `illustrations.py` | Explanatory figures with no run data (for talks and the introduction) to `figures/illustration/`: `ill01_same_mean_different_risk`, three cost distributions with the same mean (= budget) but different V and tails. |
+| `make_figures.py` | Draws the paper's 2 main figures to `figures/paper/`, its 3 supplement figures to `figures/supplement/` and every other report figure to `figures/not_in_paper/` (`--paper` for the paper's figures only, `--pdf` also writes vector PDFs), plus `figures/INDEX.md`. The `PAPER`, `SUPPLEMENT` and `NOT_IN_PAPER` lists and `PAPER_FILES` (file names) at the bottom of the file are the single source of what exists. |
+| `illustrations.py` | Explanatory figures with no run data (for talks and the introduction) to `figures/illustration/`: `intro_same_mean_different_risk`, three cost distributions with the same mean (= budget) but different V and tails. |
 | `key_numbers.py` | Prints every number quoted in the reports and writes them to `figures/key_numbers.json`. |
 
 `wandb_exports/`, `figures/` and `*.csv` are git-ignored: they are large or can be regenerated.
@@ -21,10 +21,10 @@ From the repo folder:
 ```bash
 python -m pip install numpy matplotlib          # only if they are missing
 python safety_analysis/download_wandb.py        # once, or again after new runs finish
-python safety_analysis/make_figures.py          # all 20 figures (under a minute)
-python safety_analysis/make_figures.py --paper  # the 8 main-text figures only
-python safety_analysis/make_figures.py --pdf    # the same, plus vector PDF copies
-python safety_analysis/make_figures.py fig07    # one figure
+python safety_analysis/make_figures.py --pdf    # every figure, with vector PDFs (under a minute)
+python safety_analysis/make_figures.py --paper  # only the 5 figures the paper uses
+python safety_analysis/make_figures.py fig1_    # one figure, by file name (or function name, e.g. fig34)
+python safety_analysis/illustrations.py         # the introduction illustration
 python safety_analysis/key_numbers.py           # all quoted numbers
 python safety_analysis/key_numbers.py levels    # only the sections whose name contains 'levels'
 ```
@@ -40,36 +40,36 @@ What to expect on another computer:
   Figure numbers shifted when figures were added, so an old file could otherwise be
   mistaken for the new figure with the same number.
 
-## Paper figures (branch paper-trim, 11 Oct)
+## Paper figures (Paper Plan, 20 Oct; renamed 21 Oct)
 
-The paper (direction brief in `Research Topics/4_Phase3_Research_Project/Notes/CRAX_project_direction_brief.pdf`)
-asks two questions: (RQ1) how the per-episode violation rate V depends on the mean cost, task and robot;
-(RQ2) which lever reduces V at what reward cost. `figures/paper/`, in the order the paper uses them:
+The paper asks two questions: (RQ1) how the per-episode violation rate V depends on the mean cost,
+task and robot; (RQ2) which training change reduces V at what reward cost. Since 21 Oct the figures
+the paper uses are written under names that say where they appear; `figures/INDEX.md` (written by
+`make_figures.py`) lists them with their LaTeX labels. Ready-made LaTeX blocks with captions are in
+`Research Topics/4_Phase3_Research_Project/SRL_1/figure_blocks.tex`.
 
-| Paper figure | File | Shows |
-|---|---|---|
-| 1 | fig34_mean_vs_share_all_tasks | RQ1 headline: mean cost / budget vs % episodes over budget, every run of every task. One band: V is set by the mean alone. Prints the per-task numbers quoted in the paper. |
-| 2 | fig17_levels_metrics | RQ1: Goal Levels 1-3, the mean holds while the tail (p99, % over 2d) grows |
-| 3 | fig03_algos_cost_curves | Training-time cost per update, seven algorithms, Goal L1 |
-| 4 | fig22_final_eval_goal | RQ2: final policy per lever on Goal L1 (V, cost, D_norm+, reward; stochastic vs greedy) |
-| 5 | fig32_tradeoff_final | RQ2: final greedy reward vs V per task, with the experiment-14 levers on Button |
-| 6 | fig26_fixed_baselines | RQ2: cost and reward curves of each lever vs its CRAX default |
-| 7 | fig24_training_vs_final | Training-time vs final-policy safety, per run |
-| 8 | fig23_cdfs | CDFs of D_norm (Spoor et al. Fig. 2 style): training, final stochastic, final greedy |
-| 9 | fig36_penalty_floor | RQ2: penalty floor (experiments 15/16), one-glance summary: % of episodes over budget and reward kept, CRAX default vs floor, per algorithm and task |
-| 10 | fig37_floor_distributions | RQ2: penalty floor, final-policy episode-cost distributions, CRAX default vs floor, PPO-Lag / FOCOPS / P3O on Goal and Button |
+| In the paper | File (`figures/...`) | Drawing function | Shows |
+|---|---|---|---|
+| Fig. 1 (RQ1) | `paper/fig1_violation_rate_vs_mean_cost` | `fig34_mean_vs_share_all_tasks` | Every run of every task: mean cost / budget vs % of episodes over budget. One band: V is set by the mean. Prints the per-task numbers quoted in the paper. |
+| Fig. 2 (RQ2) | `paper/fig2_penalty_floor_cost_distributions` | `fig37_floor_distributions` | Final-policy episode-cost distributions, CRAX default vs penalty floor, PPO-Lag / FOCOPS / P3O on Goal and Button |
+| Fig. S1 | `supplement/figS1_goal_levels_metrics` | `fig17_levels_metrics` | Goal Levels 1-3: the mean holds while the tail (p99, % over 2d) grows; backs Table 1 |
+| Fig. S2 | `supplement/figS2_training_vs_final_violation_rate` | `fig24_training_vs_final` | Training-time vs final-policy V, per run; justifies training-time data for RQ1 |
+| Fig. S3 (optional) | `supplement/figS3_penalty_floor_summary` | `fig36_penalty_floor` | One-glance summary of Fig. 2: V and reward kept, default vs floor |
+| Intro (optional) | `illustration/intro_same_mean_different_risk` | `illustrations.py` | Three made-up cost distributions with the same mean (= budget); not run data |
 
-`figures/supplement/` holds the 12 supporting figures (measurement checks, Ant curves,
-lambda-rate dose-response, penalties, tails, CPO diagnostics, other-task curves, and fig35: the
-final-policy cost distribution on Button as an exceedance curve, added 12 Oct); the
-`SUPPLEMENT` list in `make_figures.py` says which.
+Paper figures are drawn at their printed width (single column 3.33 in, full width 7 in) with
+7-8 pt text and carry no notes or long titles: what is plotted belongs in the LaTeX caption.
+
+`figures/not_in_paper/` holds every other figure (the in-depth reports' figures, including fig03,
+fig22, fig23, fig26 and fig32, which the paper dropped on 20 Oct) under its old `figNN_` name; the
+`NOT_IN_PAPER` list in `make_figures.py` says which.
 
 ### Experiment 14: levers on Button (`scripts/snellius/14_levers_button.sh`)
 
 PPO-Lag with target 12.5 (measured against 25) and P3O with fixed kappa = 20 on Button, T = 2000, 3 seeds,
 50M steps (~30 SBU per run). Ran 11 Oct. `bash scripts/snellius/14_levers_button.sh list` previews (and checks
 wandb's 128-character group-name limit), `sbatch` submits from the repo root, `python safety_analysis/download_wandb.py`
-fetches. The runs appear in paper figures 1 and 5 (`BUTTON_LEVERS` in `make_figures.py`).
+fetches. The runs appear in Fig. 1 and in `not_in_paper/fig32_tradeoff_final` (`BUTTON_LEVERS` in `make_figures.py`).
 
 ## Second batch (6 Oct): figures 22-33 (historical note)
 
